@@ -26,6 +26,7 @@ from fakesnow.dialect import parse_one
 from fakesnow.expr import normalise_ident
 from fakesnow.fakes import FakeSnowflakeConnection
 from fakesnow.instance import FakeSnow
+from fakesnow.rowset import to_json_rowset
 from fakesnow.rowtype import ColumnInfo, describe_as_rowtype
 from fakesnow.statement_type import DML_TYPE_IDS, statement_type_id
 from fakesnow.transforms import SERVER_VERSION, stage
@@ -36,7 +37,24 @@ logger.handlers = logging.getLogger("uvicorn").handlers
 logger.setLevel(logging.INFO)
 
 shared_fs = FakeSnow()
-sessions: dict[str, FakeSnowflakeConnection] = {}
+
+
+@dataclass
+class Session:
+    conn: FakeSnowflakeConnection
+    # the client application, eg: JDBC, which decides the parameter that picks its result format
+    client_app_id: str | None
+
+
+sessions: dict[str, Session] = {}
+
+# the session parameter each client sets to receive results as json rather than arrow
+RESULT_FORMAT_PARAMETERS = {
+    "Go": "GO_QUERY_RESULT_FORMAT",
+    "JDBC": "JDBC_QUERY_RESULT_FORMAT",
+    "ODBC": "ODBC_QUERY_RESULT_FORMAT",
+    "PythonConnector": "PYTHON_CONNECTOR_QUERY_RESULT_FORMAT",
+}
 
 
 @dataclass
@@ -66,9 +84,10 @@ async def login_request(request: Request) -> JSONResponse:
         fs = shared_fs
     token = secrets.token_urlsafe(32)
     logger.info(f"Session login {database=} {schema=} {nop_regexes=}")
-    sessions[token] = fs.connect(
+    conn = fs.connect(
         database, schema, nop_regexes=nop_regexes, autocommit=autocommit, session_parameters=session_params
     )
+    sessions[token] = Session(conn, body_json["data"].get("CLIENT_APP_ID"))
     return JSONResponse(
         {
             "data": {
@@ -95,7 +114,8 @@ async def login_request(request: Request) -> JSONResponse:
 
 async def query_request(request: Request) -> JSONResponse:
     try:
-        conn = to_conn(to_token(request))
+        session = to_session(to_token(request))
+        conn = session.conn
 
         body = await request.body()
         if request.headers.get("Content-Encoding") == "gzip":
@@ -208,6 +228,11 @@ async def query_request(request: Request) -> JSONResponse:
                     [None if v is None else str(v) for v in row]
                     for row in zip(*[c.to_pylist() for c in arrow_table.columns], strict=True)
                 ],
+            }
+        elif result_format(session) == "json":
+            result = {
+                "queryResultFormat": "json",
+                "rowset": to_json_rowset(arrow_table, rowtype) if arrow_table else [],
             }
         elif arrow_table:
             batch_bytes = to_ipc(to_sf(arrow_table, rowtype))
@@ -322,11 +347,22 @@ def to_token(request: Request) -> str:
     return auth[17:-1]
 
 
-def to_conn(token: str) -> FakeSnowflakeConnection:
-    if not (conn := sessions.get(token)):
+def to_session(token: str) -> Session:
+    if not (session := sessions.get(token)):
         raise ServerError(status_code=401, code="390104", message="User must login again to access the service.")
 
-    return conn
+    return session
+
+
+def to_conn(token: str) -> FakeSnowflakeConnection:
+    return to_session(token).conn
+
+
+def result_format(session: Session) -> str:
+    """The format the session's client asked for its results in: json or arrow, the default."""
+    parameter = RESULT_FORMAT_PARAMETERS.get(session.client_app_id or "")
+    value = parameter and session.conn.session_parameters.get(parameter)
+    return "json" if isinstance(value, str) and value.upper() == "JSON" else "arrow"
 
 
 async def session(request: Request) -> JSONResponse:

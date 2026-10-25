@@ -55,8 +55,11 @@ class FakeSnowflakeConnection:
         self.table_stages = TableStages(duck_conn)
         self.results_cache = results_cache
         self._autocommit = kwargs.get("autocommit", True)
+        self.session_parameters: dict[str, Any] = {
+            k.upper(): v for k, v in (kwargs.get("session_parameters") or {}).items()
+        }
         self.quoted_identifiers_ignore_case = _is_true(
-            (kwargs.get("session_parameters") or {}).get("QUOTED_IDENTIFIERS_IGNORE_CASE", False)
+            self.session_parameters.get("QUOTED_IDENTIFIERS_IGNORE_CASE", False)
         )
         self._in_transaction = False
 

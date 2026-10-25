@@ -566,6 +566,13 @@ class FakeSnowflakeCursor:
         elif (qiic := transformed.args.get("set_quoted_identifiers_ignore_case")) is not None:
             self._conn.quoted_identifiers_ignore_case = qiic
 
+        elif set_session_parameter := transformed.args.get("set_session_parameter"):
+            name, value = set_session_parameter
+            if value is None:
+                self._conn.session_parameters.pop(name, None)
+            else:
+                self._conn.session_parameters[name] = value
+
         elif create_db_name := transformed.args.get("create_db_name"):
             # we created a new database, so create the info schema extensions
             self._duck_conn.execute(info_schema.per_db_creation_sql(create_db_name))

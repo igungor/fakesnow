@@ -241,6 +241,55 @@ def test_server_quoted_identifiers_ignore_case(server: dict) -> None:
         assert cur.description[0].name == "ABC"
 
 
+@pytest.mark.parametrize(
+    "parameter", ["PYTHON_CONNECTOR_QUERY_RESULT_FORMAT", "ALTER SESSION SET PYTHON_CONNECTOR_QUERY_RESULT_FORMAT"]
+)
+def test_server_json_result_format(server: dict, parameter: str) -> None:
+    sql = """
+        select 1::int, 42.83::number(10,8), 'abc', true, '2020-05-12'::date, '15:02:33.123'::time,
+            '2020-05-12 15:02:33.5'::timestamp_ntz, '2020-05-12 15:02:33'::timestamp_tz, to_binary('626C6F62', 'HEX'),
+            parse_json('{"k": [1, 2]}'), null::varchar
+    """
+    with snowflake.connector.connect(**server, database="db1", schema="schema1") as conn, conn.cursor() as cur:
+        cur.execute(sql)
+        arrow = cur.fetchall()
+
+    if parameter.startswith("ALTER"):
+        with snowflake.connector.connect(**server, database="db1", schema="schema1") as conn, conn.cursor() as cur:
+            cur.execute(f"{parameter} = 'JSON'")
+            cur.execute(sql)
+            json = cur.fetchall()
+    else:
+        session_parameters = server["session_parameters"] | {parameter: "JSON"}
+        with (
+            snowflake.connector.connect(
+                **server | {"session_parameters": session_parameters}, database="db1", schema="schema1"
+            ) as conn,
+            conn.cursor() as cur,
+        ):
+            cur.execute(sql)
+            json = cur.fetchall()
+
+    # snowflake indents semi-structured values in json results
+    *json_rest, json_variant, json_null = json[0]
+    *arrow_rest, _arrow_variant, arrow_null = arrow[0]
+    assert (json_rest, json_null) == (arrow_rest, arrow_null)
+    assert json_variant == '{\n  "k": [\n    1,\n    2\n  ]\n}'
+
+
+def test_server_json_result_format_real(server: dict) -> None:
+    session_parameters = server["session_parameters"] | {"PYTHON_CONNECTOR_QUERY_RESULT_FORMAT": "JSON"}
+    with (
+        snowflake.connector.connect(
+            **server | {"session_parameters": session_parameters}, database="db1", schema="schema1"
+        ) as conn,
+        conn.cursor() as cur,
+    ):
+        # snowflake formats a float in a json result as it does in TO_VARCHAR
+        cur.execute("select 3.140000104904175::float")
+        assert cur.fetchall() == [(3.140000105,)]
+
+
 def test_server_explicit_begin(scur: snowflake.connector.cursor.SnowflakeCursor) -> None:
     # clients that manage transactions themselves send BEGIN rather than relying on the
     # connector, eg: database/sql in Go calls it from Tx.Begin

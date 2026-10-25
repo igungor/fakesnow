@@ -1565,6 +1565,9 @@ def alter_session(expression: Expr) -> Expr:
         - UNSET ...            => success, back to the default of false
     - AUTOCOMMIT:
         - SET ... = true/false => success (returns NOP success with side effect arg)
+    - JDBC_QUERY_RESULT_FORMAT, GO_QUERY_RESULT_FORMAT and the other clients' result formats:
+        - SET ... = 'JSON'/'ARROW' => success (returns NOP success with side effect arg)
+        - UNSET ...                => success, back to the default of arrow
     """
 
     if (
@@ -1600,6 +1603,23 @@ def alter_session(expression: Expr) -> Expr:
             ):
                 new = SUCCESS_NOP.copy()
                 new.args["set_autocommit"] = rhs.this
+                return new
+
+            elif name.endswith("_QUERY_RESULT_FORMAT") and bool(alter_session.args.get("unset")):
+                new = SUCCESS_NOP.copy()
+                new.args["set_session_parameter"] = (name, None)
+                return new
+
+            elif (
+                name.endswith("_QUERY_RESULT_FORMAT")
+                and isinstance(items[0].this, exp.EQ)
+                and (rhs := items[0].this.args.get("expression"))
+                and isinstance(rhs, exp.Literal)
+                and rhs.is_string
+                and rhs.this.upper() in ("JSON", "ARROW")
+            ):
+                new = SUCCESS_NOP.copy()
+                new.args["set_session_parameter"] = (name, rhs.this.upper())
                 return new
 
         raise NotImplementedError(expression.sql(dialect="snowflake"))
