@@ -318,3 +318,13 @@ def test_use_qualified_schema_updates_current_database(dcur: snowflake.connector
     dcur.execute("SELECT CURRENT_DATABASE(), CURRENT_SCHEMA()")
 
     assert dcur.fetchall() == [{"current_database()": "DB2", "current_schema()": "SCHEMA2"}]
+
+
+def test_connect_without_schema_identifier_qualified_table(_fakesnow: None):
+    with snowflake.connector.connect(database="db1", schema="schema1") as conn, conn.cursor() as cur:
+        cur.execute("create table t (id int)")
+        cur.execute("insert into t values (1)")
+
+    with snowflake.connector.connect(database="db1", paramstyle="qmark") as conn, conn.cursor() as cur:
+        assert cur.execute("select id from identifier('db1.schema1.t')").fetchall() == [(1,)]
+        assert cur.execute("select id from identifier(?)", ("db1.schema1.t",)).fetchall() == [(1,)]

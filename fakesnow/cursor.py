@@ -223,7 +223,7 @@ class FakeSnowflakeCursor:
                 return self
 
             expression = parse_one(command)
-            self.check_db_and_schema(expression)
+            self.check_db_and_schema(expression, params)
 
             for statement in self._transform_explode(expression):
                 transformed = self._transform(statement, params)
@@ -279,8 +279,13 @@ class FakeSnowflakeCursor:
         assert self._arrow_table is not None
         self._rowcount = self._arrow_table.num_rows
 
-    def check_db_and_schema(self, expression: Expr) -> None:
-        no_database, no_schema = checks.is_unqualified_table_expression(expression)
+    def check_db_and_schema(self, expression: Expr, params: MutableParams | None = None) -> None:
+        # a table named with IDENTIFIER(...) is qualified by the name it resolves to. resolve a copy,
+        # because resolving consumes the params
+        resolved = expression.copy().transform(
+            lambda e: transforms.identifier(e, list(params) if isinstance(params, list) else params), copy=False
+        )
+        no_database, no_schema = checks.is_unqualified_table_expression(resolved)
 
         if no_database and not self._conn.database_set:
             cmd = expr.key_command(expression)
