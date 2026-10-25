@@ -33,10 +33,7 @@ SELECT
             '{"type":"FIXED","precision":' || numeric_precision || ',"scale":' || numeric_scale || ',"nullable":true}'
         WHEN data_type = 'TEXT' THEN
             '{"type":"TEXT","length":' || coalesce(character_maximum_length,16777216)  || ',"byteLength":' ||
-            CASE
-                WHEN character_maximum_length = 16777216 THEN 16777216
-                ELSE coalesce(character_maximum_length*4,16777216)
-            END  || ',"nullable":true,"fixed":false}'
+            coalesce(character_maximum_length,16777216)*4  || ',"nullable":true,"fixed":false}'
         WHEN data_type in ('TIMESTAMP_NTZ','TIMESTAMP_TZ','TIME') THEN
             '{"type":"' || data_type || '","precision":0,"scale":9,"nullable":true}'
         WHEN data_type = 'FLOAT' THEN '{"type":"REAL","nullable":true}'
@@ -51,7 +48,8 @@ SELECT
     COALESCE(comment, '') as "comment",
     table_catalog as "database_name",
     '' as "autoincrement",
-    NULL as "schema_evolution_record"
+    NULL as "schema_evolution_record",
+    NULL as "write_default"
 FROM _fs_global._fs_information_schema._fs_columns
 ORDER BY table_catalog, table_schema, table_name, ordinal_position
 """

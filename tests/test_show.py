@@ -32,6 +32,7 @@ def test_show_columns(dcur: snowflake.connector.cursor.SnowflakeCursor):
         "database_name": "DB1",
         "autoincrement": "",
         "schema_evolution_record": None,
+        "write_default": None,
     }
 
     # fmt: off
@@ -40,7 +41,7 @@ def test_show_columns(dcur: snowflake.connector.cursor.SnowflakeCursor):
         {**common_fields, "column_name": "XINT", "data_type": '{"type":"FIXED","precision":38,"scale":0,"nullable":true}'},
         {**common_fields, "column_name": "XFLOAT", "data_type": '{"type":"REAL","nullable":true}'},
         {**common_fields, "column_name": "XDECIMAL", "data_type": '{"type":"FIXED","precision":10,"scale":2,"nullable":true}'},
-        {**common_fields, "column_name": "XVARCHAR", "data_type": '{"type":"TEXT","length":16777216,"byteLength":16777216,"nullable":true,"fixed":false}'},
+        {**common_fields, "column_name": "XVARCHAR", "data_type": '{"type":"TEXT","length":16777216,"byteLength":67108864,"nullable":true,"fixed":false}'},
         {**common_fields, "column_name": "XVARCHAR20", "data_type": '{"type":"TEXT","length":20,"byteLength":80,"nullable":true,"fixed":false}'},
         {**common_fields, "column_name": "XDATE", "data_type": '{"type":"DATE","nullable":true}'},
         {**common_fields, "column_name": "XTIME", "data_type": '{"type":"TIME","precision":0,"scale":9,"nullable":true}'},
@@ -65,6 +66,7 @@ def test_show_columns(dcur: snowflake.connector.cursor.SnowflakeCursor):
             "database_name": "DB1",
             "autoincrement": "",
             "schema_evolution_record": None,
+            "write_default": None,
         }
     ]
 
@@ -100,6 +102,7 @@ def test_show_columns(dcur: snowflake.connector.cursor.SnowflakeCursor):
         "database_name",
         "autoincrement",
         "schema_evolution_record",
+        "write_default",
     ]
 
 
