@@ -126,6 +126,40 @@ def test_get_path_null_compared_to_string(cur: snowflake.connector.cursor.Snowfl
     assert cur.fetchall() == [(None, None)]
 
 
+def test_parse_json_of_variant_string(cur: snowflake.connector.cursor.SnowflakeCursor):
+    cur.execute("""select parse_json(parse_json($$"{\\"a\\":1}"$$))""")
+    assert indent(cur.fetchall()) == [('{\n  "a": 1\n}',)]
+
+
+def test_string_functions_convert_variant_to_varchar(cur: snowflake.connector.cursor.SnowflakeCursor):
+    cur.execute("""select hex_encode(parse_json('"abc"')), concat(parse_json('"x"'), 'y')""")
+    assert cur.fetchall() == [("616263", "xy")]
+
+
+def test_insert_variant_into_varchar(cur: snowflake.connector.cursor.SnowflakeCursor):
+    cur.execute("create table example (s varchar, n number, o varchar)")
+    cur.execute(
+        """insert into example (s, n, o) select parse_json('"abc"'), parse_json('"12"'), parse_json('{"a":1}')"""
+    )
+    cur.execute("select s, n, o from example")
+    assert cur.fetchall() == [("abc", 12, '{"a":1}')]
+
+
+def test_update_variant_into_varchar(cur: snowflake.connector.cursor.SnowflakeCursor):
+    cur.execute("create table example (s varchar)")
+    cur.execute("insert into example values ('a')")
+    cur.execute("""update example set s = parse_json('{"s":"b"}'):s""")
+    cur.execute("select s from example")
+    assert cur.fetchall() == [("b",)]
+
+
+def test_insert_variant_into_variant(cur: snowflake.connector.cursor.SnowflakeCursor):
+    cur.execute("create table example (v variant)")
+    cur.execute("""insert into example select parse_json('"abc"')""")
+    cur.execute("select v from example")
+    assert cur.fetchall() == [('"abc"',)]
+
+
 def test_get_path_precedence(cur: snowflake.connector.cursor.SnowflakeCursor):
     cur.execute("select {'K1': {'K2': 1}} as col where col:K1:K2 > 0")
     assert indent(cur.fetchall()) == [('{\n  "K1": {\n    "K2": 1\n  }\n}',)]

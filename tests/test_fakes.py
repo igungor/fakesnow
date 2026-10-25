@@ -356,6 +356,14 @@ def test_haversine(cur: snowflake.connector.cursor.SnowflakeCursor):
     assert cur.fetchone()[0] == 0.0
 
 
+def test_insert_varchar_into_binary_decodes_hex(cur: snowflake.connector.cursor.SnowflakeCursor):
+    cur.execute("create table example (b binary)")
+    cur.execute("insert into example values ('616263')")
+    cur.execute("insert into example select hex_encode('def')")
+    cur.execute("select b from example")
+    assert cur.fetchall() == [(bytearray(b"abc"),), (bytearray(b"def"),)]
+
+
 def test_hex_decode_binary(cur: snowflake.connector.cursor.SnowflakeCursor):
     cur.execute("SELECT HEX_DECODE_BINARY('EDF1439075A83A447FB8B630DDC9C8DE')")
     # NB: Snowflake returns bytesarray instead of bytes

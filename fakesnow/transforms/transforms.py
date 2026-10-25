@@ -871,6 +871,151 @@ def json_extract_compared_to_string(expression: Expr) -> Expr:
     return expression
 
 
+def _is_variant(expression: Expr) -> bool:
+    """Whether the expression is known to produce a semi-structured value, without looking up column types."""
+    if isinstance(expression, exp.Paren):
+        return _is_variant(expression.this)
+    return isinstance(expression, (exp.JSONExtract, exp.ParseJSON, exp.StripNullValue, exp.GetIgnoreCase)) or (
+        isinstance(expression, exp.Anonymous) and expression.name.lower() == "_fs_get_ignore_case"
+    )
+
+
+def _is_varchar(expression: Expr) -> bool:
+    """Whether the expression is known to produce a string, without looking up column types."""
+    if isinstance(expression, exp.Paren):
+        return _is_varchar(expression.this)
+    elif isinstance(expression, exp.Literal):
+        return expression.is_string
+    elif isinstance(expression, exp.Cast):
+        return expression.to.this in _STRING_CAST_TYPES
+    return isinstance(
+        expression,
+        (
+            exp.JSONExtractScalar,
+            exp.Hex,
+            exp.Base64Encode,
+            exp.Upper,
+            exp.Lower,
+            exp.Trim,
+            exp.Concat,
+            exp.DPipe,
+            exp.Substring,
+        ),
+    )
+
+
+def _as_varchar(expression: Expr) -> Expr:
+    """Convert a semi-structured value to varchar the way snowflake does, ie: a string without its quotes."""
+    return exp.JSONExtractScalar(this=expression, expression=exp.Literal(this="$", is_string=True))
+
+
+# functions whose arguments are strings, so snowflake converts a semi-structured argument to varchar
+_VARCHAR_ARGUMENT_FUNCTIONS = (
+    exp.ParseJSON,
+    exp.Hex,
+    exp.Base64Encode,
+    exp.Upper,
+    exp.Lower,
+    exp.Trim,
+    exp.Concat,
+    exp.DPipe,
+    exp.Substring,
+)
+
+
+def variant_as_varchar_argument(expression: Expr) -> Expr:
+    """Convert a semi-structured argument of a function that takes strings to varchar, as snowflake does.
+
+    Eg: PARSE_JSON(v:json_text) parses the string v:json_text holds, rather than returning it.
+    """
+    if isinstance(expression, _VARCHAR_ARGUMENT_FUNCTIONS):
+        for key in ("this", "expression", "expressions"):
+            arg = expression.args.get(key)
+            if isinstance(arg, list):
+                expression.set(key, [_as_varchar(a) if _is_variant(a) else a for a in arg])
+            elif isinstance(arg, Expr) and _is_variant(arg):
+                expression.set(key, _as_varchar(arg))
+    return expression
+
+
+def assignment_casts(
+    expression: Expr, duck_conn: DuckDBPyConnection, current_database: str | None, current_schema: str | None
+) -> Expr:
+    """Convert the values an INSERT or UPDATE assigns to columns, as snowflake does implicitly.
+
+    - a semi-structured value assigned to a column of any other type is converted from its varchar
+      form, ie: a string without its quotes.
+    - a string assigned to a binary column is decoded as hex, the default BINARY_INPUT_FORMAT.
+    """
+    if isinstance(expression, exp.Insert):
+        target = expression.this
+        table = target.this if isinstance(target, exp.Schema) else target
+        if not isinstance(table, exp.Table):
+            return expression
+        column_types = _column_types(duck_conn, table, current_database, current_schema)
+        names = (
+            [c.name for c in target.expressions]
+            if isinstance(target, exp.Schema) and target.expressions
+            else list(column_types)
+        )
+
+        source = expression.expression
+        if isinstance(source, exp.Select):
+            rows = [source]
+        elif isinstance(source, exp.Values):
+            rows = [t for t in source.expressions if isinstance(t, exp.Tuple)]
+        else:
+            return expression
+
+        for row in rows:
+            values = row.expressions
+            if len(values) != len(names):
+                continue
+            row.set("expressions", [_assign(v, column_types.get(n)) for v, n in zip(values, names, strict=True)])
+
+    elif isinstance(expression, exp.Update) and isinstance(table := expression.this, exp.Table):
+        column_types = _column_types(duck_conn, table, current_database, current_schema)
+        for eq in expression.expressions:
+            if isinstance(eq, exp.EQ) and isinstance(eq.this, exp.Column):
+                eq.set("expression", _assign(eq.expression, column_types.get(eq.this.name)))
+
+    return expression
+
+
+def _assign(value: Expr, column_type: str | None) -> Expr:
+    if column_type is None:
+        return value
+
+    inner = value.this if isinstance(value, exp.Alias) else value
+    if column_type != "JSON" and _is_variant(inner):
+        converted: Expr = _as_varchar(inner)
+    elif column_type == "BLOB" and _is_varchar(inner):
+        converted = exp.Unhex(this=inner)
+    else:
+        return value
+
+    if isinstance(value, exp.Alias):
+        value.set("this", converted)
+        return value
+    return converted
+
+
+def _column_types(
+    duck_conn: DuckDBPyConnection, table: exp.Table, current_database: str | None, current_schema: str | None
+) -> dict[str, str]:
+    """The table's column names and their duckdb types, in column order."""
+    catalog = table.catalog or current_database
+    schema = table.db or current_schema
+    if not (catalog and schema):
+        return {}
+    duck_conn.execute(
+        "select column_name, data_type from information_schema.columns "
+        "where table_catalog = ? and table_schema = ? and table_name = ? order by ordinal_position",
+        [catalog, schema, table.name],
+    )
+    return dict(duck_conn.fetchall())
+
+
 def json_extract_precedence(expression: Expr) -> Expr:
     """Associate json extract operands to avoid duckdb operators of higher precedence transforming the expression.
 
