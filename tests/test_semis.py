@@ -79,6 +79,33 @@ def test_get_path_as_number(dcur: snowflake.connector.cursor.SnowflakeCursor):
     assert dcur.fetchall() == [{"J_STR_NUMBER": 100, "J_NUM_NUMBER": 200}]
 
 
+def test_get_ignore_case(cur: snowflake.connector.cursor.SnowflakeCursor):
+    cur.execute("""select get_ignore_case(parse_json('{"Abc": 1}'), 'aBC')""")
+    assert cur.fetchall() == [("1",)]
+
+
+def test_get_ignore_case_prefers_exact_match(cur: snowflake.connector.cursor.SnowflakeCursor):
+    cur.execute("""select get_ignore_case(parse_json('{"a": 1, "A": 2}'), 'A')""")
+    assert cur.fetchall() == [("2",)]
+
+
+def test_get_ignore_case_missing_key(cur: snowflake.connector.cursor.SnowflakeCursor):
+    cur.execute("""select get_ignore_case(parse_json('{"a": 1}'), 'b')""")
+    assert cur.fetchall() == [(None,)]
+
+
+def test_get_ignore_case_json_null(cur: snowflake.connector.cursor.SnowflakeCursor):
+    cur.execute("""select get_ignore_case(parse_json('{"a": null}'), 'A')""")
+    assert cur.fetchall() == [("null",)]
+
+
+def test_get_ignore_case_column(cur: snowflake.connector.cursor.SnowflakeCursor):
+    cur.execute("create table example (j variant, k varchar)")
+    cur.execute("""insert into example select parse_json('{"after": {"ID": 7}}'), 'id'""")
+    cur.execute("select get_ignore_case(j:after, k)::number from example")
+    assert cur.fetchall() == [(7,)]
+
+
 def test_get_path_precedence(cur: snowflake.connector.cursor.SnowflakeCursor):
     cur.execute("select {'K1': {'K2': 1}} as col where col:K1:K2 > 0")
     assert indent(cur.fetchall()) == [('{\n  "K1": {\n    "K2": 1\n  }\n}',)]

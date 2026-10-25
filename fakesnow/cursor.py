@@ -312,6 +312,7 @@ class FakeSnowflakeCursor:
             .transform(transforms.information_schema_databases, current_schema=self._conn.schema, copy=False)
             .transform(transforms.drop_schema_cascade, copy=False)
             .transform(transforms.tag, copy=False)
+            .transform(transforms.get_ignore_case, copy=False)
             .transform(transforms.semi_structured_types, copy=False)
             .transform(transforms.try_parse_json, copy=False)
             .transform(transforms.split, copy=False)

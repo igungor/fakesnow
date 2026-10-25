@@ -96,9 +96,24 @@ CREATE OR REPLACE MACRO ${catalog}._fs_haversine(lat1, lon1, lat2, lon2) AS (
 )
 
 
+# an exact key match wins, otherwise the first key that matches ignoring case
+# see https://docs.snowflake.com/en/sql-reference/functions/get_ignore_case
+FS_GET_IGNORE_CASE = Template(
+    """
+CREATE OR REPLACE MACRO ${catalog}._fs_get_ignore_case(obj, field) AS (
+    COALESCE(
+        obj -> field,
+        obj -> list_filter(json_keys(obj), lambda k: lower(k) = lower(field))[1]
+    )
+);
+"""
+)
+
+
 def creation_sql(catalog: str) -> str:
     return f"""
         {FS_FLATTEN.substitute(catalog=catalog)};
+        {FS_GET_IGNORE_CASE.substitute(catalog=catalog)};
         {FS_HAVERSINE.substitute(catalog=catalog)};
         {FS_OBJECT_CONSTRUCT.substitute(catalog=catalog)};
         {FS_OBJECT_CONSTRUCT_STAR.substitute(catalog=catalog)};

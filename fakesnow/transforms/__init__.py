@@ -54,6 +54,7 @@ from fakesnow.transforms.transforms import (
     flatten as flatten,
     flatten_value_cast_as_varchar as flatten_value_cast_as_varchar,
     float_to_double as float_to_double,
+    get_ignore_case as get_ignore_case,
     haversine as haversine,
     hex_string as hex_string,
     identifier as identifier,

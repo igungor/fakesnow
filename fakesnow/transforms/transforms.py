@@ -606,6 +606,16 @@ def hex_string(expression: Expr) -> Expr:
     return expression
 
 
+def get_ignore_case(expression: Expr) -> Expr:
+    """Transform GET_IGNORE_CASE to the _fs_get_ignore_case macro.
+
+    See https://docs.snowflake.com/en/sql-reference/functions/get_ignore_case
+    """
+    if isinstance(expression, exp.GetIgnoreCase):
+        return exp.Anonymous(this="_fs_get_ignore_case", expressions=[expression.this, expression.expression])
+    return expression
+
+
 def haversine(expression: Expr) -> Expr:
     """Transform HAVERSINE to the _fs_haversine macro.
 
