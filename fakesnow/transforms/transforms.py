@@ -832,6 +832,26 @@ def json_extract_cast_as_varchar(expression: Expr) -> Expr:
     return expression
 
 
+def json_extract_compared_to_string(expression: Expr) -> Expr:
+    """Compare json extraction to a string literal as varchar, as Snowflake does.
+
+    Without this duckdb casts the literal to json, which fails unless the literal is valid json.
+
+    Returns a raw string using the Duckdb ->> operator, aka the json_extract_string function, see
+    https://duckdb.org/docs/extensions/json#json-extraction-functions
+    """
+    if isinstance(expression, (exp.EQ, exp.NEQ)):
+        for je, other in ((expression.this, expression.expression), (expression.expression, expression.this)):
+            if (
+                isinstance(je, exp.JSONExtract)
+                and isinstance(je.expression, exp.JSONPath)
+                and isinstance(other, exp.Literal)
+                and other.is_string
+            ):
+                je.replace(exp.JSONExtractScalar(this=je.this, expression=je.expression))
+    return expression
+
+
 def json_extract_precedence(expression: Expr) -> Expr:
     """Associate json extract operands to avoid duckdb operators of higher precedence transforming the expression.
 

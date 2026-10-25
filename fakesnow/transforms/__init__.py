@@ -65,6 +65,7 @@ from fakesnow.transforms.transforms import (
     integer_precision as integer_precision,
     json_extract_cased_as_varchar as json_extract_cased_as_varchar,
     json_extract_cast_as_varchar as json_extract_cast_as_varchar,
+    json_extract_compared_to_string as json_extract_compared_to_string,
     json_extract_precedence as json_extract_precedence,
     numeric_agg_implicit_cast as numeric_agg_implicit_cast,
     object_agg as object_agg,

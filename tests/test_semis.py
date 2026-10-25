@@ -106,6 +106,26 @@ def test_get_ignore_case_column(cur: snowflake.connector.cursor.SnowflakeCursor)
     assert cur.fetchall() == [(7,)]
 
 
+def test_get_path_compared_to_string(cur: snowflake.connector.cursor.SnowflakeCursor):
+    cur.execute("""select parse_json('{"op": "d"}'):op = 'd', 'd' != parse_json('{"op": "c"}'):op""")
+    assert cur.fetchall() == [(True, True)]
+
+
+def test_get_path_compared_to_string_is_case_sensitive(cur: snowflake.connector.cursor.SnowflakeCursor):
+    cur.execute("""select parse_json('{"op": "D"}'):op = 'd'""")
+    assert cur.fetchall() == [(False,)]
+
+
+def test_get_path_number_compared_to_string(cur: snowflake.connector.cursor.SnowflakeCursor):
+    cur.execute("""select parse_json('{"n": 1}'):n = '1'""")
+    assert cur.fetchall() == [(True,)]
+
+
+def test_get_path_null_compared_to_string(cur: snowflake.connector.cursor.SnowflakeCursor):
+    cur.execute("""select parse_json('{"op": null}'):op != 'd', parse_json('{}'):op != 'd'""")
+    assert cur.fetchall() == [(None, None)]
+
+
 def test_get_path_precedence(cur: snowflake.connector.cursor.SnowflakeCursor):
     cur.execute("select {'K1': {'K2': 1}} as col where col:K1:K2 > 0")
     assert indent(cur.fetchall()) == [('{\n  "K1": {\n    "K2": 1\n  }\n}',)]
