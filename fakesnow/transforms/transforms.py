@@ -944,7 +944,7 @@ def assignment_casts(
     """Convert the values an INSERT or UPDATE assigns to columns, as snowflake does implicitly.
 
     - a semi-structured value assigned to a column of any other type is converted from its varchar
-      form, ie: a string without its quotes.
+      form, ie: a string without its quotes, and to a number column true and false are 1 and 0.
     - a string assigned to a binary column is decoded as hex, the default BINARY_INPUT_FORMAT.
     """
     if isinstance(expression, exp.Insert):
@@ -987,8 +987,10 @@ def _assign(value: Expr, column_type: str | None) -> Expr:
         return value
 
     inner = value.this if isinstance(value, exp.Alias) else value
-    if column_type != "JSON" and _is_variant(inner):
-        converted: Expr = _as_varchar(inner)
+    if _is_number_type(column_type) and _is_variant(inner):
+        converted: Expr = exp.Anonymous(this="_fs_variant_number", expressions=[inner])
+    elif column_type != "JSON" and _is_variant(inner):
+        converted = _as_varchar(inner)
     elif column_type == "BLOB" and _is_varchar(inner):
         converted = exp.Unhex(this=inner)
     else:
@@ -998,6 +1000,22 @@ def _assign(value: Expr, column_type: str | None) -> Expr:
         value.set("this", converted)
         return value
     return converted
+
+
+def _is_number_type(duckdb_type: str) -> bool:
+    return duckdb_type.startswith("DECIMAL") or duckdb_type in {
+        "TINYINT",
+        "SMALLINT",
+        "INTEGER",
+        "BIGINT",
+        "HUGEINT",
+        "UTINYINT",
+        "USMALLINT",
+        "UINTEGER",
+        "UBIGINT",
+        "FLOAT",
+        "DOUBLE",
+    }
 
 
 def _column_types(
@@ -1014,6 +1032,39 @@ def _column_types(
         [catalog, schema, table.name],
     )
     return dict(duck_conn.fetchall())
+
+
+def _variant_key(expression: Expr) -> Expr:
+    return exp.Anonymous(this="_fs_variant_key", expressions=[expression])
+
+
+def variant_ordering(expression: Expr) -> Expr:
+    """Order, aggregate and compare semi-structured values the way snowflake does.
+
+    duckdb compares json as text, so eg: 10 sorts before 9, and 1 and 1.0 are distinct. snowflake compares
+    by type, then by value. Applies to ORDER BY, MIN, MAX, COUNT(DISTINCT) and comparisons of two
+    semi-structured values.
+    """
+    if isinstance(expression, exp.Ordered) and _is_variant(expression.this):
+        expression.set("this", _variant_key(expression.this))
+    elif isinstance(expression, (exp.Min, exp.Max)) and _is_variant(expression.this) and not expression.expressions:
+        klass = exp.ArgMin if isinstance(expression, exp.Min) else exp.ArgMax
+        return klass(this=expression.this, expression=_variant_key(expression.this.copy()))
+    elif (
+        isinstance(expression, exp.Count)
+        and isinstance(distinct := expression.this, exp.Distinct)
+        and len(distinct.expressions) == 1
+        and _is_variant(distinct.expressions[0])
+    ):
+        distinct.set("expressions", [_variant_key(distinct.expressions[0])])
+    elif (
+        isinstance(expression, (exp.EQ, exp.NEQ, exp.GT, exp.GTE, exp.LT, exp.LTE))
+        and _is_variant(expression.this)
+        and _is_variant(expression.expression)
+    ):
+        expression.set("this", _variant_key(expression.this))
+        expression.set("expression", _variant_key(expression.expression))
+    return expression
 
 
 def json_extract_precedence(expression: Expr) -> Expr:

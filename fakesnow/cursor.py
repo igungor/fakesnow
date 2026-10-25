@@ -332,6 +332,7 @@ class FakeSnowflakeCursor:
             .transform(transforms.json_extract_cased_as_varchar, copy=False)
             .transform(transforms.json_extract_compared_to_string, copy=False)
             .transform(transforms.variant_as_varchar_argument, copy=False)
+            .transform(transforms.variant_ordering, copy=False)
             .transform(
                 lambda e: transforms.assignment_casts(e, self._duck_conn, self._conn.database, self._conn.schema),
                 copy=False,

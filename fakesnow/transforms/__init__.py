@@ -96,4 +96,5 @@ from fakesnow.transforms.transforms import (
     upper_case_unquoted_identifiers as upper_case_unquoted_identifiers,
     values_columns as values_columns,
     variant_as_varchar_argument as variant_as_varchar_argument,
+    variant_ordering as variant_ordering,
 )

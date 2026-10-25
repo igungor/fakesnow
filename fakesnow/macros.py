@@ -121,6 +121,35 @@ CREATE OR REPLACE MACRO ${catalog}._fs_hash_signed(h) AS (
 )
 
 
+# a semi-structured value as the text of a number, which snowflake converts true and false to 1 and 0
+FS_VARIANT_NUMBER = Template(
+    """
+CREATE OR REPLACE MACRO ${catalog}._fs_variant_number(v) AS (
+    CASE json_type(v) WHEN 'BOOLEAN' THEN (v ->> '$$')::BOOLEAN::INTEGER::VARCHAR ELSE v ->> '$$' END
+);
+"""
+)
+
+
+# a key that orders and compares semi-structured values the way snowflake does: by type, then by value.
+# booleans come first, then numbers by value, strings, objects, arrays and finally json null.
+FS_VARIANT_KEY = Template(
+    """
+CREATE OR REPLACE MACRO ${catalog}._fs_variant_key(v) AS (
+    CASE
+        WHEN v IS NULL THEN NULL
+        WHEN json_type(v) = 'BOOLEAN' THEN {'r': 0, 'n': (v ->> '$$')::BOOLEAN::DOUBLE, 's': NULL::VARCHAR}
+        WHEN json_type(v) = 'VARCHAR' THEN {'r': 2, 'n': NULL::DOUBLE, 's': v ->> '$$'}
+        WHEN json_type(v) = 'OBJECT' THEN {'r': 3, 'n': NULL::DOUBLE, 's': v::VARCHAR}
+        WHEN json_type(v) = 'ARRAY' THEN {'r': 4, 'n': NULL::DOUBLE, 's': v::VARCHAR}
+        WHEN json_type(v) = 'NULL' THEN {'r': 5, 'n': NULL::DOUBLE, 's': NULL::VARCHAR}
+        ELSE {'r': 1, 'n': (v ->> '$$')::DOUBLE, 's': NULL::VARCHAR}
+    END
+);
+"""
+)
+
+
 def creation_sql(catalog: str) -> str:
     return f"""
         {FS_FLATTEN.substitute(catalog=catalog)};
@@ -130,4 +159,6 @@ def creation_sql(catalog: str) -> str:
         {FS_OBJECT_CONSTRUCT.substitute(catalog=catalog)};
         {FS_OBJECT_CONSTRUCT_STAR.substitute(catalog=catalog)};
         {FS_TO_TIMESTAMP.substitute(catalog=catalog)};
+        {FS_VARIANT_KEY.substitute(catalog=catalog)};
+        {FS_VARIANT_NUMBER.substitute(catalog=catalog)};
     """

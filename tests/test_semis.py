@@ -145,6 +145,13 @@ def test_insert_variant_into_varchar(cur: snowflake.connector.cursor.SnowflakeCu
     assert cur.fetchall() == [("abc", 12, '{"a":1}')]
 
 
+def test_insert_variant_boolean_into_number(cur: snowflake.connector.cursor.SnowflakeCursor):
+    cur.execute("create table example (t number(1,0), f number(1,0), r number)")
+    cur.execute("insert into example select parse_json('true'), parse_json('false'), parse_json('1.5')")
+    cur.execute("select t, f, r from example")
+    assert cur.fetchall() == [(1, 0, 2)]
+
+
 def test_update_variant_into_varchar(cur: snowflake.connector.cursor.SnowflakeCursor):
     cur.execute("create table example (s varchar)")
     cur.execute("insert into example values ('a')")
@@ -158,6 +165,37 @@ def test_insert_variant_into_variant(cur: snowflake.connector.cursor.SnowflakeCu
     cur.execute("""insert into example select parse_json('"abc"')""")
     cur.execute("select v from example")
     assert cur.fetchall() == [('"abc"',)]
+
+
+def test_order_by_variant(cur: snowflake.connector.cursor.SnowflakeCursor):
+    # objects and arrays order after strings, but among themselves fakesnow orders them by their json text,
+    # which differs from snowflake
+    cur.execute(
+        """
+        select column1 from values ('null'), ('false'), ('true'), ('1'), ('1.5'), ('-3'), ('"a"'), ('"1"'), ('"B"'),
+            ('[1]'), ('{"a":1}'), ('1e3'), ('10')
+        order by parse_json(column1)
+        """
+    )
+    assert [v for (v,) in cur.fetchall()] == [
+        "false", "true", "-3", "1", "1.5", "10", "1e3", '"1"', '"B"', '"a"', '{"a":1}', "[1]", "null"
+    ]  # fmt: skip
+
+
+def test_min_max_variant(cur: snowflake.connector.cursor.SnowflakeCursor):
+    # only semi-structured expressions, eg: a path, are compared as snowflake does, not columns of type variant
+    cur.execute("select min(parse_json(column1)), max(parse_json(column1)) from values ('9'), ('10'), ('2'), ('10.0')")
+    assert cur.fetchall() == [("2", "10")]
+
+
+def test_count_distinct_variant(cur: snowflake.connector.cursor.SnowflakeCursor):
+    cur.execute("""select count(distinct parse_json(column1)) from values ('1'), ('1.0'), ('"1"'), ('true')""")
+    assert cur.fetchall() == [(3,)]
+
+
+def test_compare_variants(cur: snowflake.connector.cursor.SnowflakeCursor):
+    cur.execute("select parse_json('9') < parse_json('10'), parse_json('1') = parse_json('1.0')")
+    assert cur.fetchall() == [(True, True)]
 
 
 def test_get_path_precedence(cur: snowflake.connector.cursor.SnowflakeCursor):
