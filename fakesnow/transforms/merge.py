@@ -37,21 +37,17 @@ def _create_merge_candidates(merge_expr: exp.Merge) -> Expr:
     case_when_clauses: list[str] = []
     values: set[str] = set()
 
+    def source_columns(e: Expr) -> set[str]:
+        """Columns in the expression that reference the source table, including the source table identifier."""
+        return {
+            str(c)
+            for c in e.find_all(exp.Column)
+            if (table := c.args.get("table")) and isinstance(table, exp.Identifier) and checks.equal(table, source_id)
+        }
+
     # extract keys that reference the source table from the join expression
     # so they can be used by the mutation statements for joining
-    # will include the source table identifier
-    values.update(
-        map(
-            str,
-            {
-                c
-                for c in join_expr.find_all(exp.Column)
-                if (table := c.args.get("table"))
-                and isinstance(table, exp.Identifier)
-                and checks.equal(table, source_id)
-            },
-        )
-    )
+    values.update(source_columns(join_expr))
 
     # Iterate through the WHEN clauses to build up the CASE WHEN clauses
     for w_idx, w in enumerate(merge_expr.args["whens"]):
@@ -74,6 +70,9 @@ def _create_merge_candidates(merge_expr: exp.Merge) -> Expr:
             if isinstance(then, exp.Update):
                 case_when_clauses.append(f"WHEN {predicate} THEN {w_idx}")
                 values.update([str(c.expression) for c in then.expressions if isinstance(c.expression, exp.Column)])
+                # the update reads the source from merge_candidates, so it needs every source column it uses
+                for c in then.expressions:
+                    values.update(source_columns(c.expression))
             elif isinstance(then, exp.Var) and then.name.upper() == "DELETE":
                 case_when_clauses.append(f"WHEN {predicate} THEN {w_idx}")
             else:
@@ -83,6 +82,9 @@ def _create_merge_candidates(merge_expr: exp.Merge) -> Expr:
             assert isinstance(then, exp.Insert), f"Expected 'Insert', got {then}"
             insert_values = then.expression.expressions
             values.update([str(c) for c in insert_values if isinstance(c, exp.Column)])
+            # the insert reads the source from merge_candidates, so it needs every source column it uses
+            for v in insert_values:
+                values.update(source_columns(v))
             predicate = f"AND {condition}" if condition else ""
             case_when_clauses.append(
                 f"WHEN {target_tbl.alias or target_tbl.name}.rowid is NULL {predicate} THEN {w_idx}"

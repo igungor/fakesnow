@@ -649,6 +649,28 @@ def test_merge_delete_lowercase(conn: snowflake.connector.SnowflakeConnection):
         assert cur.fetchall() == [(2,)]
 
 
+def test_merge_source_column_in_expressions(conn: snowflake.connector.SnowflakeConnection):
+    # source columns used only inside expressions, eg: a semi-structured path, still reach the update and insert
+    with conn.cursor() as cur:
+        cur.execute("create or replace table t (id int, name varchar)")
+        cur.execute("insert into t values (1, 'a')")
+        cur.execute("create or replace table cdc (rec variant)")
+        cur.execute("""insert into cdc select parse_json('{"id": 1, "name": "b"}')""")
+        cur.execute("""insert into cdc select parse_json('{"id": 2, "name": "c"}')""")
+
+        cur.execute(
+            """
+            merge into t using (select rec:id::int as id, rec from cdc) s on t.id = s.id
+            when matched then update set name = s.rec:name::varchar
+            when not matched then insert (id, name) values (s.rec:id::int, upper(s.rec:name::varchar))
+            """
+        )
+        assert cur.fetchall() == [(1, 1)]
+
+        cur.execute("select id, name from t order by id")
+        assert cur.fetchall() == [(1, "b"), (2, "C")]
+
+
 def test_merge_rowcount(conn: snowflake.connector.SnowflakeConnection):
     # snowflake reports the rows affected across all the merge operations, not the single row
     # the counts are returned in
