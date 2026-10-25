@@ -329,6 +329,23 @@ def test_floats_are_64bit(cur: snowflake.connector.cursor.SnowflakeCursor):
     assert cur.fetchall() == [(1.23, 1.23, 1.23, 1.23, 1.23)]
 
 
+def test_hash_star(cur: snowflake.connector.cursor.SnowflakeCursor):
+    cur.execute("select hash(*) = hash(a, b) from (select 1 a, 2 b)")
+    assert cur.fetchall() == [(True,)]
+
+
+def test_hash_is_signed_64_bit(cur: snowflake.connector.cursor.SnowflakeCursor):
+    cur.execute("select hash(a) from (select column1 a from values (1), (2), (3), (4), (5), (6), (7), (8))")
+    values = [v for (v,) in cur.fetchall()]
+    assert all(-(2**63) <= v < 2**63 for v in values)
+    assert any(v < 0 for v in values)
+
+
+def test_hash_null(cur: snowflake.connector.cursor.SnowflakeCursor):
+    cur.execute("select hash(null) is null")
+    assert cur.fetchall() == [(False,)]
+
+
 def test_haversine(cur: snowflake.connector.cursor.SnowflakeCursor):
     # San Francisco (37.7749, -122.4194) to Los Angeles (34.0522, -118.2437) ~ 559 km
     cur.execute("SELECT ROUND(HAVERSINE(37.7749, -122.4194, 34.0522, -118.2437), 0)")

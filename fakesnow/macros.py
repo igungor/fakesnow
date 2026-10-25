@@ -110,10 +110,22 @@ CREATE OR REPLACE MACRO ${catalog}._fs_get_ignore_case(obj, field) AS (
 )
 
 
+# snowflake's HASH returns a signed 64-bit number, duckdb's an unsigned one, so reinterpret its bits
+# see https://docs.snowflake.com/en/sql-reference/functions/hash
+FS_HASH_SIGNED = Template(
+    """
+CREATE OR REPLACE MACRO ${catalog}._fs_hash_signed(h) AS (
+    (h::HUGEINT - (h >> 63)::HUGEINT * 18446744073709551616)::BIGINT
+);
+"""
+)
+
+
 def creation_sql(catalog: str) -> str:
     return f"""
         {FS_FLATTEN.substitute(catalog=catalog)};
         {FS_GET_IGNORE_CASE.substitute(catalog=catalog)};
+        {FS_HASH_SIGNED.substitute(catalog=catalog)};
         {FS_HAVERSINE.substitute(catalog=catalog)};
         {FS_OBJECT_CONSTRUCT.substitute(catalog=catalog)};
         {FS_OBJECT_CONSTRUCT_STAR.substitute(catalog=catalog)};

@@ -616,6 +616,25 @@ def get_ignore_case(expression: Expr) -> Expr:
     return expression
 
 
+def hash_(expression: Expr) -> Expr:
+    """Transform HASH to duckdb's hash as a signed 64-bit number, and HASH(*) to a hash of all columns.
+
+    The values differ from snowflake's, whose algorithm is not public.
+
+    See https://docs.snowflake.com/en/sql-reference/functions/hash
+    """
+    if (
+        isinstance(expression, exp.Anonymous)
+        and expression.name.upper() == "HASH"
+        and not (isinstance(expression.parent, exp.Anonymous) and expression.parent.name == "_fs_hash_signed")
+    ):
+        args = [
+            exp.Columns(this=exp.Star(), unpack=True) if isinstance(a, exp.Star) else a for a in expression.expressions
+        ]
+        return exp.Anonymous(this="_fs_hash_signed", expressions=[exp.Anonymous(this="hash", expressions=args)])
+    return expression
+
+
 def haversine(expression: Expr) -> Expr:
     """Transform HAVERSINE to the _fs_haversine macro.
 

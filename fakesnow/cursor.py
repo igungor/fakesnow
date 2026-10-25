@@ -368,6 +368,7 @@ class FakeSnowflakeCursor:
             .transform(transforms.show_users, copy=False)
             .transform(transforms.create_user, copy=False)
             .transform(transforms.haversine, copy=False)
+            .transform(transforms.hash_, copy=False)
             .transform(transforms.hex_string, copy=False)
             .transform(transforms.sha256, copy=False)
             .transform(transforms.create_clone, copy=False)
