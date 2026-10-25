@@ -421,6 +421,8 @@ class FakeSnowflakeCursor:
         self._sfqid = None
 
         cmd = expr.key_command(transformed)
+        # a table internal to a merge isn't a snowflake object, so it has no metadata to keep
+        keeps_metadata = not transformed.args.get("merge_candidates")
 
         sql = transformed.sql(dialect="duckdb")
 
@@ -632,7 +634,7 @@ class FakeSnowflakeCursor:
                 result_sql = SQL_CREATED_TABLE.substitute(name=ident)
 
                 # a newly created table object has no load history
-                if table := transformed.find(exp.Table):
+                if keeps_metadata and (table := transformed.find(exp.Table)):
                     catalog = table.catalog or self._conn.database
                     schema = table.db or self._conn.schema
                     assert catalog and schema
@@ -668,7 +670,7 @@ class FakeSnowflakeCursor:
             secret_name = match[1].upper() if match else "UNKNOWN"
             result_sql = SQL_CREATED_SECRET.substitute(name=secret_name)
 
-        if table_comment := cast(tuple[exp.Table, str], transformed.args.get("table_comment")):
+        if keeps_metadata and (table_comment := cast(tuple[exp.Table, str], transformed.args.get("table_comment"))):
             # record table comment
             table, comment = table_comment
             catalog = table.catalog or self._conn.database
@@ -676,8 +678,10 @@ class FakeSnowflakeCursor:
             assert catalog and schema
             self._duck_conn.execute(info_schema.insert_table_comment_sql(catalog, schema, table.name, comment))
 
-        if (text_lengths := cast(list[tuple[str, int]], transformed.args.get("text_lengths"))) and (
-            table := transformed.find(exp.Table)
+        if (
+            keeps_metadata
+            and (text_lengths := cast(list[tuple[str, int]], transformed.args.get("text_lengths")))
+            and (table := transformed.find(exp.Table))
         ):
             # record text lengths
             catalog = table.catalog or self._conn.database

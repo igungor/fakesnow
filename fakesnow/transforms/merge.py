@@ -103,7 +103,11 @@ def _create_merge_candidates(merge_expr: exp.Merge) -> Expr:
     WHERE MERGE_OP IS NOT NULL
     """
 
-    return sqlglot.parse_one(sql)
+    candidates = sqlglot.parse_one(sql)
+    # marks the table as internal to the merge, so the cursor keeps no metadata for it, which needs a
+    # current schema for an unqualified table
+    candidates.set("merge_candidates", True)
+    return candidates
 
 
 def _mutations(merge_expr: exp.Merge) -> list[Expr]:

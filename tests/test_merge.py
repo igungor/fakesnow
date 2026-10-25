@@ -671,6 +671,22 @@ def test_merge_source_column_in_expressions(conn: snowflake.connector.SnowflakeC
         assert cur.fetchall() == [(1, "b"), (2, "C")]
 
 
+def test_merge_without_current_schema(_fakesnow: None):
+    with snowflake.connector.connect(database="db1", schema="schema1") as conn, conn.cursor() as cur:
+        cur.execute("create table t (id int, name varchar)")
+        cur.execute("insert into t values (1, 'a')")
+
+    with snowflake.connector.connect(database="db1") as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            merge into db1.schema1.t using (select 1 as id, 'b'::varchar as name) s on db1.schema1.t.id = s.id
+            when matched then update set name = s.name
+            when not matched then insert (id, name) values (s.id, s.name)
+            """
+        )
+        assert cur.fetchall() == [(0, 1)]
+
+
 def test_merge_rowcount(conn: snowflake.connector.SnowflakeConnection):
     # snowflake reports the rows affected across all the merge operations, not the single row
     # the counts are returned in
