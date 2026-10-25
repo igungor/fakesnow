@@ -1450,6 +1450,20 @@ def upper_case_unquoted_identifiers(expression: Expr) -> Expr:
     return expression
 
 
+def upper_case_quoted_identifiers(expression: Expr) -> Expr:
+    """Upper case quoted identifiers, as snowflake does when QUOTED_IDENTIFIERS_IGNORE_CASE is true.
+
+    See https://docs.snowflake.com/en/sql-reference/parameters#quoted-identifiers-ignore-case
+    """
+
+    if isinstance(expression, exp.Identifier) and expression.quoted and isinstance(expression.this, str):
+        new = expression.copy()
+        new.set("this", expression.this.upper())
+        return new
+
+    return expression
+
+
 def values_columns(expression: Expr) -> Expr:
     """Support column1, column2 expressions in VALUES.
 
@@ -1547,9 +1561,8 @@ def alter_session(expression: Expr) -> Expr:
 
     Supported parameters:
     - QUOTED_IDENTIFIERS_IGNORE_CASE:
-        - SET ... = false      => NOP success
-        - UNSET ...            => NOP success
-        - SET ... = true       => Not implemented
+        - SET ... = true/false => success (returns NOP success with side effect arg)
+        - UNSET ...            => success, back to the default of false
     - AUTOCOMMIT:
         - SET ... = true/false => success (returns NOP success with side effect arg)
     """
@@ -1564,16 +1577,20 @@ def alter_session(expression: Expr) -> Expr:
         if items and isinstance(items[0], exp.SetItem) and (ident := items[0].find(exp.Identifier)):
             name = ident.this.upper()
 
-            if name == "QUOTED_IDENTIFIERS_IGNORE_CASE" and (
-                bool(alter_session.args.get("unset"))
-                or (
-                    isinstance(items[0].this, exp.EQ)
-                    and (rhs := items[0].this.args.get("expression"))
-                    and isinstance(rhs, exp.Boolean)
-                    and rhs.this is False
-                )
+            if name == "QUOTED_IDENTIFIERS_IGNORE_CASE" and bool(alter_session.args.get("unset")):
+                new = SUCCESS_NOP.copy()
+                new.args["set_quoted_identifiers_ignore_case"] = False
+                return new
+
+            elif (
+                name == "QUOTED_IDENTIFIERS_IGNORE_CASE"
+                and isinstance(items[0].this, exp.EQ)
+                and (rhs := items[0].this.args.get("expression"))
+                and isinstance(rhs, exp.Boolean)
             ):
-                return SUCCESS_NOP
+                new = SUCCESS_NOP.copy()
+                new.args["set_quoted_identifiers_ignore_case"] = rhs.this
+                return new
 
             elif (
                 name == "AUTOCOMMIT"

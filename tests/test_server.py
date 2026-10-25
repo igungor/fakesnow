@@ -230,6 +230,17 @@ def test_server_merge_response_total(sconn: snowflake.connector.SnowflakeConnect
     assert result["data"]["total"] == 1
 
 
+def test_server_quoted_identifiers_ignore_case(server: dict) -> None:
+    with (
+        snowflake.connector.connect(
+            **server | {"session_parameters": {"QUOTED_IDENTIFIERS_IGNORE_CASE": True}}
+        ) as conn,
+        conn.cursor() as cur,
+    ):
+        cur.execute('select 1 as "abc"')
+        assert cur.description[0].name == "ABC"
+
+
 def test_server_explicit_begin(scur: snowflake.connector.cursor.SnowflakeCursor) -> None:
     # clients that manage transactions themselves send BEGIN rather than relying on the
     # connector, eg: database/sql in Go calls it from Tx.Begin

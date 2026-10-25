@@ -91,6 +91,7 @@ from fakesnow.transforms.transforms import (
     trim_cast_varchar as trim_cast_varchar,
     try_parse_json as try_parse_json,
     update_variables as update_variables,
+    upper_case_quoted_identifiers as upper_case_quoted_identifiers,
     upper_case_unquoted_identifiers as upper_case_unquoted_identifiers,
     values_columns as values_columns,
 )

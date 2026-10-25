@@ -432,19 +432,43 @@ def test_percentile_cont(conn: snowflake.connector.SnowflakeConnection):
 
 
 def test_quoted_identifiers_ignore_case(dcur: snowflake.connector.cursor.SnowflakeCursor) -> None:
-    # no op
-    dcur.execute("alter session set quoted_identifiers_ignore_case = false")
+    dcur.execute("alter session set quoted_identifiers_ignore_case = true")
     assert dcur.fetchall() == [{"status": "Statement executed successfully."}]
 
-    # no op
+    dcur.execute('select 1 as "abc", 2 as "Def", 3 as ghi')
+    assert dcur.fetchall() == [{"ABC": 1, "DEF": 2, "GHI": 3}]
+
+
+def test_quoted_identifiers_ignore_case_resolves_upper_case(cur: snowflake.connector.cursor.SnowflakeCursor) -> None:
+    cur.execute("alter session set quoted_identifiers_ignore_case = true")
+    cur.execute('create table example ("id" int)')
+    cur.execute('insert into example ("Id") values (1)')
+
+    cur.execute('select "ID" from example')
+    assert cur.fetchall() == [(1,)]
+
+
+def test_quoted_identifiers_ignore_case_unset(dcur: snowflake.connector.cursor.SnowflakeCursor) -> None:
+    dcur.execute("alter session set quoted_identifiers_ignore_case = true")
     dcur.execute("alter session unset quoted_identifiers_ignore_case")
+    assert dcur.fetchall() == [{"status": "Statement executed successfully."}]
 
-    with pytest.raises(ProgrammingError) as excinfo:
-        dcur.execute("alter session set quoted_identifiers_ignore_case = true")
+    dcur.execute('select 1 as "abc"')
+    assert dcur.fetchall() == [{"abc": 1}]
 
-    assert "not implemented" in str(excinfo.value)
 
-    # other alter session params not implemented
+def test_quoted_identifiers_ignore_case_session_parameter(_fakesnow: None) -> None:
+    with (
+        snowflake.connector.connect(
+            database="db1", schema="schema1", session_parameters={"QUOTED_IDENTIFIERS_IGNORE_CASE": True}
+        ) as conn,
+        conn.cursor() as cur,
+    ):
+        cur.execute('select 1 as "abc"')
+        assert cur.description[0].name == "ABC"
+
+
+def test_alter_session_not_implemented(dcur: snowflake.connector.cursor.SnowflakeCursor) -> None:
     with pytest.raises(ProgrammingError) as excinfo:
         dcur.execute("alter session set JSON_INDENT = 1")
 

@@ -55,6 +55,9 @@ class FakeSnowflakeConnection:
         self.table_stages = TableStages(duck_conn)
         self.results_cache = results_cache
         self._autocommit = kwargs.get("autocommit", True)
+        self.quoted_identifiers_ignore_case = _is_true(
+            (kwargs.get("session_parameters") or {}).get("QUOTED_IDENTIFIERS_IGNORE_CASE", False)
+        )
         self._in_transaction = False
 
         # create database if needed
@@ -175,3 +178,8 @@ class FakeSnowflakeConnection:
     @property
     def schema(self) -> str | None:
         return "INFORMATION_SCHEMA" if self._schema == "_FS_INFORMATION_SCHEMA" else self._schema
+
+
+def _is_true(value: object) -> bool:
+    """A session parameter's boolean value, which clients send as a bool or a string."""
+    return value is True or (isinstance(value, str) and value.lower() == "true")

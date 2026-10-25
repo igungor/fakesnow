@@ -223,6 +223,9 @@ class FakeSnowflakeCursor:
                 return self
 
             expression = parse_one(command)
+            if self._conn.quoted_identifiers_ignore_case:
+                # before the statement is split, so it applies only to the identifiers it was written with
+                expression = expression.transform(transforms.upper_case_quoted_identifiers, copy=False)
             self.check_db_and_schema(expression, params)
 
             for statement in self._transform_explode(expression):
@@ -559,6 +562,9 @@ class FakeSnowflakeCursor:
 
         elif (set_autocommit := transformed.args.get("set_autocommit")) is not None:
             self._conn.autocommit(set_autocommit)
+
+        elif (qiic := transformed.args.get("set_quoted_identifiers_ignore_case")) is not None:
+            self._conn.quoted_identifiers_ignore_case = qiic
 
         elif create_db_name := transformed.args.get("create_db_name"):
             # we created a new database, so create the info schema extensions
