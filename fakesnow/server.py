@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import base64
 import gzip
-import hashlib
 import json
 import logging
 import os
@@ -14,18 +12,16 @@ from typing import Any
 from urllib.parse import quote
 
 import snowflake.connector.errors
-from cryptography.hazmat.primitives import padding
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from sqlglot import Expr, exp
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
-from starlette.datastructures import Headers
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from fakesnow import snowpipe, statement_type
+from fakesnow import bucket, snowpipe, statement_type
 from fakesnow.arrow import to_ipc, to_sf
+from fakesnow.bucket import BUCKET, STAGE_MASTER_KEY, STAGE_MASTER_KEY_ID
 from fakesnow.converter import from_binding
 from fakesnow.cursor import FakeSnowflakeCursor
 from fakesnow.dialect import parse_one
@@ -43,14 +39,6 @@ logger.handlers = logging.getLogger("uvicorn").handlers
 logger.setLevel(logging.INFO)
 
 shared_fs = FakeSnow()
-
-# clients encrypt files with a key wrapped by the stage master key before uploading them to an internal stage
-STAGE_MASTER_KEY = secrets.token_bytes(16)
-STAGE_MASTER_KEY_ID = 1
-
-# the bucket internal stages are stored in. an underscore isn't valid in a host name, so S3 clients address
-# it path-style, ie: http://host/fs_bucket/key rather than http://fs_bucket.host/key
-BUCKET = "fs_bucket"
 
 
 @dataclass
@@ -321,83 +309,6 @@ def s3_stage_info(request: Request, put_stage_data: stage.UploadCommandDict) -> 
     }
 
 
-def _unwrap(wrapped_key: bytes) -> bytes:
-    decryptor = Cipher(algorithms.AES(STAGE_MASTER_KEY), modes.ECB()).decryptor()
-    unpadder = padding.PKCS7(128).unpadder()
-    padded = decryptor.update(wrapped_key) + decryptor.finalize()
-    return unpadder.update(padded) + unpadder.finalize()
-
-
-def _file_key(headers: Headers) -> tuple[bytes, bytes] | None:
-    """The key and iv a client encrypted a file with before uploading it, or None if it didn't encrypt it.
-
-    Clients encrypt files for snowflake's internal stages with a random key, using AES-CBC, and send that key
-    encrypted with the stage master key, using AES-ECB, in the object's metadata: GCS's encryptiondata, or S3's
-    x-amz-key and x-amz-iv.
-    """
-    if encryption_data := headers.get("x-goog-meta-encryptiondata"):
-        data = json.loads(encryption_data)
-        wrapped_key = base64.b64decode(data["WrappedContentKey"]["EncryptedKey"])
-        iv = base64.b64decode(data["ContentEncryptionIV"])
-    elif (key := headers.get("x-amz-meta-x-amz-key")) and (iv64 := headers.get("x-amz-meta-x-amz-iv")):
-        wrapped_key = base64.b64decode(key)
-        iv = base64.b64decode(iv64)
-    else:
-        return None
-    return _unwrap(wrapped_key), iv
-
-
-def _decode_aws_chunked(body: bytes) -> bytes:
-    """The payload of an S3 upload sent with aws-chunked content encoding.
-
-    Each chunk is its size in hex, optionally followed by ;chunk-signature=..., then CRLF, the data and CRLF. A
-    zero size chunk ends the payload, followed by any trailing headers, eg: a checksum.
-    See https://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-streaming.html
-    """
-    payload = bytearray()
-    position = 0
-    while True:
-        line_end = body.index(b"\r\n", position)
-        size = int(body[position:line_end].split(b";", 1)[0], 16)
-        if size == 0:
-            return bytes(payload)
-        start = line_end + 2
-        payload += body[start : start + size]
-        position = start + size + 2
-
-
-def _write_bucket_file(path: str, body: bytes, file_key: tuple[bytes, bytes] | None) -> str | None:
-    """Write body to path within the local bucket, returning the target path, or None if invalid."""
-    target = os.path.normpath(os.path.join(stage.LOCAL_BUCKET_PATH, path))
-    if not target.startswith(stage.LOCAL_BUCKET_PATH + os.sep):
-        return None
-
-    if file_key:
-        stage.write_encrypted_file(target, body, *file_key)
-        return target
-
-    os.makedirs(os.path.dirname(target), exist_ok=True)
-    with open(target, "wb") as f:
-        f.write(body)
-    return target
-
-
-async def bucket_upload(request: Request) -> Response:
-    """Store an uploaded file in the local bucket, ie: the backing storage for internal stages.
-
-    Takes a PUT to a GCS presigned url, or an S3 PutObject to the bucket.
-    """
-    body = await request.body()
-    if request.headers.get("x-amz-content-sha256", "").startswith("STREAMING-"):
-        body = _decode_aws_chunked(body)
-    target = await run_in_threadpool(_write_bucket_file, request.path_params["path"], body, _file_key(request.headers))
-    if not target:
-        return Response(status_code=400)
-    logger.info(f"Uploaded {len(body)} bytes to {target}")
-    # S3 clients check the upload against its md5, which S3 returns as the ETag of an unencrypted object
-    return Response(headers={"ETag": f'"{hashlib.md5(body).hexdigest()}"'})
-
-
 def describe_only_response(
     conn: FakeSnowflakeConnection,
     cur: FakeSnowflakeCursor,
@@ -556,7 +467,8 @@ routes = [
         methods=["POST"],
     ),
     Route("/queries/v1/abort-request", lambda _: JSONResponse({"success": True}), methods=["POST"]),
-    Route(f"/{BUCKET}/{{path:path}}", bucket_upload, methods=["PUT"]),
+    Route(f"/{BUCKET}", bucket.bucket, methods=["GET"]),
+    Route(f"/{BUCKET}/{{path:path}}", bucket.bucket_object, methods=["GET", "HEAD", "PUT", "POST", "DELETE"]),
     Route("/monitoring/queries/{sfqid}", monitoring_query, methods=["GET"]),
     Route("/v1/data/pipes/{pipe}/insertFiles", insert_files, methods=["POST"]),
     Route("/v1/data/pipes/{pipe}/insertReport", insert_report, methods=["GET"]),

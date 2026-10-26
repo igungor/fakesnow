@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import datetime
+import json
 import os
 import shutil
 import tempfile
@@ -9,7 +11,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from glob import escape as glob_escape
 from pathlib import PurePath
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
@@ -27,8 +29,9 @@ from fakesnow.transforms.options import parse_options
 
 # TODO: clean up temp files on exit
 LOCAL_BUCKET_PATH = tempfile.mkdtemp(prefix="fakesnow_bucket_")
-# the keys of the files clients encrypted before uploading them, by the file's path within LOCAL_BUCKET_PATH
-LOCAL_KEYS_PATH = tempfile.mkdtemp(prefix="fakesnow_keys_")
+# the metadata of the files clients uploaded, by the file's path within LOCAL_BUCKET_PATH: its object metadata,
+# ETag, and the key it was encrypted with, if any
+LOCAL_METADATA_PATH = tempfile.mkdtemp(prefix="fakesnow_metadata_")
 
 
 class StageInfoDict(TypedDict):
@@ -204,7 +207,7 @@ def create_stage(
         with suppress(FileNotFoundError):
             shutil.rmtree(internal_dir(f"{catalog}.{schema}.{stage_name}"))
         with suppress(FileNotFoundError):
-            shutil.rmtree(_key_path(internal_dir(f"{catalog}.{schema}.{stage_name}")))
+            shutil.rmtree(_metadata_path(internal_dir(f"{catalog}.{schema}.{stage_name}")))
     return transformed
 
 
@@ -454,26 +457,44 @@ def parts_from_var(var: str, current_database: str | None, current_schema: str |
     return database_name, schema_name, name
 
 
-def _key_path(path: str) -> str:
-    return os.path.join(LOCAL_KEYS_PATH, os.path.relpath(path, LOCAL_BUCKET_PATH))
+class FileMetadata(TypedDict):
+    # the object's user metadata, eg: x-amz-meta-sfc-digest as sfc-digest
+    metadata: dict[str, str]
+    etag: str
+    # base64 of the key and iv the client encrypted the file with, when it did
+    key: NotRequired[str]
+    iv: NotRequired[str]
 
 
-def write_encrypted_file(path: str, body: bytes, key: bytes, iv: bytes) -> None:
-    """Keep a file as a client encrypted it, with AES-CBC, as snowflake's internal stages do."""
+def _metadata_path(path: str) -> str:
+    return os.path.join(LOCAL_METADATA_PATH, os.path.relpath(path, LOCAL_BUCKET_PATH))
+
+
+def write_file(path: str, body: bytes, metadata: FileMetadata) -> None:
+    """Keep a file a client uploaded as it sent it, encrypted or not, with its metadata."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "wb") as f:
         f.write(body)
-    key_path = _key_path(path)
-    os.makedirs(os.path.dirname(key_path), exist_ok=True)
-    with open(key_path, "wb") as f:
-        f.write(key + iv)
+    metadata_path = _metadata_path(path)
+    os.makedirs(os.path.dirname(metadata_path), exist_ok=True)
+    with open(metadata_path, "w") as f:
+        json.dump(metadata, f)
+
+
+def file_metadata(path: str) -> FileMetadata | None:
+    """The metadata of a file a client uploaded, or None for a file written another way, eg: a local PUT."""
+    try:
+        with open(_metadata_path(path)) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return None
 
 
 def remove_file(path: str) -> None:
-    """Remove a file from an internal stage, with its key if a client encrypted it."""
+    """Remove a file from an internal stage, with its metadata."""
     os.remove(path)
     with suppress(FileNotFoundError):
-        os.remove(_key_path(path))
+        os.remove(_metadata_path(path))
 
 
 @contextmanager
@@ -482,12 +503,11 @@ def readable(paths: list[str]) -> Iterator[list[str]]:
     with tempfile.TemporaryDirectory(prefix="fakesnow_decrypted_") as tmp:
         readable_paths = []
         for i, path in enumerate(paths):
-            if not (is_internal(path) and os.path.isfile(key_path := _key_path(path))):
+            metadata = file_metadata(path) if is_internal(path) else None
+            if not (metadata and "key" in metadata and "iv" in metadata):
                 readable_paths.append(path)
                 continue
-            with open(key_path, "rb") as f:
-                key_iv = f.read()
-            key, iv = key_iv[:-16], key_iv[-16:]
+            key, iv = base64.b64decode(metadata["key"]), base64.b64decode(metadata["iv"])
             decryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
             unpadder = padding.PKCS7(128).unpadder()
             with open(path, "rb") as f:
