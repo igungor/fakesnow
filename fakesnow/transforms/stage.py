@@ -221,11 +221,13 @@ def list_stage(
         raise snowflake.connector.errors.ProgrammingError(
             msg="SQL compilation error:\nsyntax error in LIST stage reference.", errno=1003, sqlstate="42000"
         )
-    var = argument[1:]
+    # separate the case-sensitive path, which files must start with, from the stage name
+    var, _, path = argument[1:].partition("/")
     catalog, schema, stage_name = parts_from_var(var, current_database=current_database, current_schema=current_schema)
 
     transformed = sqlglot.parse_one(stage_lookup_sql(catalog, schema, stage_name, table_stages), read="duckdb")
     transformed.args["list_stage_name"] = f"{catalog}.{schema}.{stage_name}"
+    transformed.args["list_stage_path"] = path
     return transformed
 
 
@@ -338,7 +340,7 @@ def complete_stage_lookup(expression: Expr, result: tuple | None) -> str:
         raise not_found_error(stage_name)
     storage_name = result[0]
     if expression.args.get("list_stage_name"):
-        return list_stage_files_sql(storage_name)
+        return list_stage_files_sql(storage_name, expression.args["list_stage_path"])
     expression.args["put_stage_data"]["stageInfo"]["location"] = internal_dir(
         storage_name, expression.args["put_stage_path"]
     )
@@ -415,13 +417,16 @@ def internal_file_name(path: str) -> str:
     return f"{_file_name_prefix(stage_name)}{'/'.join(file_parts)}"
 
 
-def list_stage_files_sql(stage_name: str) -> str:
+def list_stage_files_sql(stage_name: str, path: str = "") -> str:
     """
     Generate SQL to list files in a stage directory, matching Snowflake's LIST output format.
+
+    Only files whose path within the stage starts with path are listed.
     """
     sdir = internal_dir(stage_name)
     prefix = exp.Literal.string(_file_name_prefix(stage_name.rsplit(".", 1)[-1])).sql(dialect="duckdb")
     glob = exp.Literal.string(f"{sdir}**/*").sql(dialect="duckdb")
+    starts_with = exp.Literal.string(f"{sdir}{path}").sql(dialect="duckdb")
     return f"""
         select
             {prefix} || substr(filename, {len(sdir) + 1}) AS name,
@@ -429,6 +434,7 @@ def list_stage_files_sql(stage_name: str) -> str:
             md5(content) as md5,
             strftime(last_modified, '%a, %d %b %Y %H:%M:%S GMT') as last_modified
         from read_blob({glob})
+        where starts_with(filename, {starts_with})
     """
 
 

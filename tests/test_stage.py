@@ -379,3 +379,22 @@ def test_put_gzipped_src_not_recompressed(dcur: snowflake.connector.cursor.DictC
                 "message": "",
             }
         ]
+
+
+@pytest.fixture
+def stage_files(dcur: snowflake.connector.cursor.DictCursor, tmp_path: Path) -> snowflake.connector.cursor.DictCursor:
+    dcur.execute("CREATE STAGE files_stage")
+    for name in ["a1.csv", "a2.csv", "b1.csv"]:
+        (tmp_path / name).write_text("1\n")
+    dcur.execute(f"PUT 'file://{tmp_path}/a1.csv' @files_stage/dir")
+    dcur.execute(f"PUT 'file://{tmp_path}/a2.csv' @files_stage/dir")
+    dcur.execute(f"PUT 'file://{tmp_path}/b1.csv' @files_stage")
+    return dcur
+
+
+def test_list_path(stage_files: snowflake.connector.cursor.DictCursor) -> None:
+    stage_files.execute("LIST @files_stage/dir/a1")
+    assert [r["name"] for r in stage_files.fetchall()] == ["files_stage/dir/a1.csv.gz"]
+
+    stage_files.execute("LS @files_stage/b")
+    assert [r["name"] for r in stage_files.fetchall()] == ["files_stage/b1.csv.gz"]
