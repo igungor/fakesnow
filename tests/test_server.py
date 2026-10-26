@@ -1,5 +1,6 @@
 # ruff: noqa: E501
 
+import base64
 import datetime
 import os
 import tempfile
@@ -630,9 +631,11 @@ def test_server_put_presigned_stage_info(sconn: snowflake.connector.SnowflakeCon
 
         stage_info = result["data"]["stageInfo"]
         assert stage_info["locationType"] == "GCS"
-        # the JDBC driver fails on a GCS stage without an endPoint, and encrypts without isClientSideEncrypted false
+        # the JDBC driver fails on a GCS stage without an endPoint, or an upload without encryption material
         assert stage_info["endPoint"] is None
-        assert stage_info["isClientSideEncrypted"] is False
+        material = result["data"]["encryptionMaterial"]
+        assert len(base64.b64decode(material["queryStageMasterKey"])) == 16
+        assert material["queryId"] and material["smkId"]
 
 
 def test_server_bucket_upload_rejects_path_outside_bucket(server: dict) -> None:

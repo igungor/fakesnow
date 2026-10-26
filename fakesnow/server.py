@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import gzip
 import json
 import logging
@@ -12,6 +13,8 @@ from typing import Any
 from urllib.parse import quote
 
 import snowflake.connector.errors
+from cryptography.hazmat.primitives import padding
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from sqlglot import Expr, exp
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
@@ -38,6 +41,10 @@ logger.handlers = logging.getLogger("uvicorn").handlers
 logger.setLevel(logging.INFO)
 
 shared_fs = FakeSnow()
+
+# clients encrypt files with a key wrapped by the stage master key before uploading them to an internal stage
+STAGE_MASTER_KEY = secrets.token_bytes(16)
+STAGE_MASTER_KEY_ID = 1
 
 
 @dataclass
@@ -185,6 +192,11 @@ async def query_request(request: Request) -> JSONResponse:
                     # LOCAL_FS because the connector re-requests the presigned url by executing
                     # the command without bindings (see SnowflakeGCSRestClient).
                     put_stage_data["stageInfo"] = gcs_stage_info(request, expr, put_stage_data)
+                    put_stage_data["encryptionMaterial"] = {
+                        "queryStageMasterKey": b64encode(STAGE_MASTER_KEY).decode("utf-8"),
+                        "queryId": cur.sfqid,
+                        "smkId": STAGE_MASTER_KEY_ID,
+                    }
                 # this is a PUT command, so return the stage data
                 return JSONResponse(
                     {
@@ -280,17 +292,37 @@ def gcs_stage_info(request: Request, expr: Expr, put_stage_data: stage.UploadCom
         "location": f"{expr.args['put_stage_name']}/",
         "creds": {},
         "presignedUrl": f"{request.url.scheme}://{request.url.netloc}/fs_bucket/{path}",
-        # the JDBC driver requires an endPoint of a GCS stage, and encrypts files before uploading unless told not to
+        # the JDBC driver requires an endPoint of a GCS stage
         "endPoint": None,
-        "isClientSideEncrypted": False,
     }
 
 
-def _write_bucket_file(path: str, body: bytes) -> str | None:
+def _file_key(encryption_data: str) -> tuple[bytes, bytes]:
+    """The key and iv a client encrypted a file with before uploading it, as clients do for snowflake's internal
+    stages.
+
+    The client encrypts the file with a random key, using AES-CBC, and sends that key encrypted with the stage master
+    key, using AES-ECB, in the GCS encryptiondata metadata.
+    """
+    data = json.loads(encryption_data)
+    wrapped_key = base64.b64decode(data["WrappedContentKey"]["EncryptedKey"])
+    iv = base64.b64decode(data["ContentEncryptionIV"])
+
+    decryptor = Cipher(algorithms.AES(STAGE_MASTER_KEY), modes.ECB()).decryptor()
+    unpadder = padding.PKCS7(128).unpadder()
+    padded = decryptor.update(wrapped_key) + decryptor.finalize()
+    return unpadder.update(padded) + unpadder.finalize(), iv
+
+
+def _write_bucket_file(path: str, body: bytes, encryption_data: str | None) -> str | None:
     """Write body to path within the local bucket, returning the target path, or None if invalid."""
     target = os.path.normpath(os.path.join(stage.LOCAL_BUCKET_PATH, path))
     if not target.startswith(stage.LOCAL_BUCKET_PATH + os.sep):
         return None
+
+    if encryption_data:
+        stage.write_encrypted_file(target, body, *_file_key(encryption_data))
+        return target
 
     os.makedirs(os.path.dirname(target), exist_ok=True)
     with open(target, "wb") as f:
@@ -301,7 +333,9 @@ def _write_bucket_file(path: str, body: bytes) -> str | None:
 async def bucket_upload(request: Request) -> Response:
     """Store an uploaded file in the local bucket, ie: the backing storage for internal stages."""
     body = await request.body()
-    target = await run_in_threadpool(_write_bucket_file, request.path_params["path"], body)
+    target = await run_in_threadpool(
+        _write_bucket_file, request.path_params["path"], body, request.headers.get("x-goog-meta-encryptiondata")
+    )
     if not target:
         return Response(status_code=400)
     logger.info(f"Uploaded {len(body)} bytes to {target}")

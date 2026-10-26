@@ -5,7 +5,8 @@ import os
 import shutil
 import tempfile
 import uuid
-from contextlib import suppress
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
 from glob import escape as glob_escape
 from pathlib import PurePath
 from typing import Any, TypedDict
@@ -14,6 +15,8 @@ from urllib.request import url2pathname
 
 import snowflake.connector.errors
 import sqlglot
+from cryptography.hazmat.primitives import padding
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from duckdb import DuckDBPyConnection
 from snowflake.connector.file_util import SnowflakeFileUtil
 from sqlglot import Expr, exp
@@ -24,6 +27,8 @@ from fakesnow.transforms.options import parse_options
 
 # TODO: clean up temp files on exit
 LOCAL_BUCKET_PATH = tempfile.mkdtemp(prefix="fakesnow_bucket_")
+# the keys of the files clients encrypted before uploading them, by the file's path within LOCAL_BUCKET_PATH
+LOCAL_KEYS_PATH = tempfile.mkdtemp(prefix="fakesnow_keys_")
 
 
 class StageInfoDict(TypedDict):
@@ -198,6 +203,8 @@ def create_stage(
         # must prevent the replacement from succeeding with stale files.
         with suppress(FileNotFoundError):
             shutil.rmtree(internal_dir(f"{catalog}.{schema}.{stage_name}"))
+        with suppress(FileNotFoundError):
+            shutil.rmtree(_key_path(internal_dir(f"{catalog}.{schema}.{stage_name}")))
     return transformed
 
 
@@ -447,6 +454,53 @@ def parts_from_var(var: str, current_database: str | None, current_schema: str |
     return database_name, schema_name, name
 
 
+def _key_path(path: str) -> str:
+    return os.path.join(LOCAL_KEYS_PATH, os.path.relpath(path, LOCAL_BUCKET_PATH))
+
+
+def write_encrypted_file(path: str, body: bytes, key: bytes, iv: bytes) -> None:
+    """Keep a file as a client encrypted it, with AES-CBC, as snowflake's internal stages do."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as f:
+        f.write(body)
+    key_path = _key_path(path)
+    os.makedirs(os.path.dirname(key_path), exist_ok=True)
+    with open(key_path, "wb") as f:
+        f.write(key + iv)
+
+
+def remove_file(path: str) -> None:
+    """Remove a file from an internal stage, with its key if a client encrypted it."""
+    os.remove(path)
+    with suppress(FileNotFoundError):
+        os.remove(_key_path(path))
+
+
+@contextmanager
+def readable(paths: list[str]) -> Iterator[list[str]]:
+    """The paths to read the files from, decrypting the ones clients encrypted into temporary files."""
+    with tempfile.TemporaryDirectory(prefix="fakesnow_decrypted_") as tmp:
+        readable_paths = []
+        for i, path in enumerate(paths):
+            if not (is_internal(path) and os.path.isfile(key_path := _key_path(path))):
+                readable_paths.append(path)
+                continue
+            with open(key_path, "rb") as f:
+                key_iv = f.read()
+            key, iv = key_iv[:-16], key_iv[-16:]
+            decryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
+            unpadder = padding.PKCS7(128).unpadder()
+            with open(path, "rb") as f:
+                padded = decryptor.update(f.read()) + decryptor.finalize()
+            # keep the name, as the file format is detected from the extension
+            target = os.path.join(tmp, str(i), os.path.basename(path))
+            os.makedirs(os.path.dirname(target))
+            with open(target, "wb") as f:
+                f.write(unpadder.update(padded) + unpadder.finalize())
+            readable_paths.append(target)
+        yield readable_paths
+
+
 def is_internal(s: str) -> bool:
     return PurePath(s).is_relative_to(LOCAL_BUCKET_PATH)
 
@@ -524,7 +578,7 @@ def remove_stage_files_sql(stage_name: str, path: str = "") -> str:
         for file in files:
             full = os.path.join(root, file)
             if (relative := full[len(sdir) :]).startswith(path):
-                os.remove(full)
+                remove_file(full)
                 removed.append(f"{prefix}{relative}")
 
     if not removed:

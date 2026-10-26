@@ -70,13 +70,29 @@ def copy_into(
     schema = table.db or current_schema
     assert schema
 
+    with stage.readable(urls) as paths:
+        return _copy_files(expr, cparams, duck_conn, table, current_database, schema, urls, paths, params)
+
+
+def _copy_files(
+    expr: exp.Copy,
+    cparams: CopyParams,
+    duck_conn: DuckDBPyConnection,
+    table: exp.Table,
+    current_database: str | None,
+    schema: str,
+    urls: list[str],
+    paths: list[str],
+    params: MutableParams | None,
+) -> str:
+    """Copy the files at urls, reading each from its path in paths."""
     parquet_info = None
     if isinstance(cparams.file_format, ReadParquet):
         from_ = expr.args["files"][0]
         if not isinstance(from_, exp.Subquery):
             if cparams.match_by_column_name != MatchByColumnName.NONE:
                 target_cols = _get_table_columns(table, duck_conn, current_database, schema)
-                parquet_columns = {url: _get_parquet_column_names(url, duck_conn) for url in urls}
+                parquet_columns = {path: _get_parquet_column_names(path, duck_conn) for path in paths}
                 parquet_info = ParquetLoadInfo(parquet_columns, target_columns=target_cols)
             else:
                 # Parquet without MATCH_BY_COLUMN_NAME or subquery requires a single VARIANT column
@@ -88,10 +104,10 @@ def copy_into(
                         errno=2019,
                         sqlstate="0A000",
                     )
-                parquet_columns = {url: _get_parquet_column_names(url, duck_conn) for url in urls}
+                parquet_columns = {path: _get_parquet_column_names(path, duck_conn) for path in paths}
                 parquet_info = ParquetLoadInfo(parquet_columns, is_single_variant=True)
 
-    inserts = _inserts(expr, cparams, urls, parquet_info)
+    inserts = _inserts(expr, cparams, paths, parquet_info)
 
     histories: list[LoadHistoryRecord] = []
     load_time = datetime.datetime.now(datetime.UTC).isoformat()
@@ -122,7 +138,7 @@ def copy_into(
                 path = stage.file_path(url)
                 if cparams.purge and stage.is_internal(path):
                     # If the file is internal, we can remove it from the stage
-                    os.remove(path)
+                    stage.remove_file(path)
 
             history = LoadHistoryRecord(
                 schema_name=schema,
