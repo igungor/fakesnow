@@ -35,6 +35,7 @@ from fakesnow.transforms.stage import (
     create_stage as create_stage,
     list_stage as list_stage,
     put_stage as put_stage,
+    remove_stage as remove_stage,
 )
 from fakesnow.transforms.transforms import (
     SERVER_VERSION as SERVER_VERSION,

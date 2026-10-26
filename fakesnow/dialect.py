@@ -9,18 +9,33 @@ import sqlglot
 from sqlglot import Expr, exp
 from sqlglot.dialects.snowflake import Snowflake
 from sqlglot.errors import ParseError
+from sqlglot.expressions.core import Expression
 from sqlglot.parsers.snowflake import _show_parser
 from sqlglot.tokenizer_core import TokenType
 from sqlglot.trie import new_trie
 
 
+class StageFiles(Expression):
+    """The files of a stage that a statement acts on: a location, optionally with a PATTERN."""
+
+    arg_types: ClassVar = {"this": True, "pattern": False}
+
+
 class FakeSnowflake(Snowflake):
     """Snowflake's dialect with the statements sqlglot doesn't parse yet: CREATE, DESCRIBE, DROP and SHOW
-    of pipes."""
+    of pipes, and the stage and pattern of a REMOVE.
+
+    A REMOVE stays a Command, so it generates as written, with its stage in the "remove_stage" arg and its
+    pattern in "remove_pattern".
+    """
 
     class Parser(Snowflake.Parser):
         SHOW_PARSERS: ClassVar = {**Snowflake.Parser.SHOW_PARSERS, "PIPES": _show_parser("PIPES")}
         SHOW_TRIE: ClassVar = new_trie(key.split(" ") for key in SHOW_PARSERS)
+        EXPRESSION_PARSERS: ClassVar = {
+            **Snowflake.Parser.EXPRESSION_PARSERS,
+            StageFiles: lambda self: self._parse_stage_files(),
+        }
 
         def _parse_create(self) -> exp.Create | exp.Command:
             index = self._index
@@ -62,6 +77,39 @@ class FakeSnowflake(Snowflake):
                     exp.Drop(tables=[self._parse_table_parts(schema=True)], kind="PIPE", exists=if_exists)
                 )
             return super()._parse_drop(exists=exists, kind=kind)
+
+        def _parse_command(self) -> exp.Command:
+            if self._prev.text.upper() not in ("REMOVE", "RM"):
+                return super()._parse_command()
+
+            command = self.expression(
+                exp.Command(this=self._prev.text.upper(), expression=self._parse_string()),
+                comments=self._prev_comments,
+            )
+            if not isinstance(rest := command.expression, exp.Literal):
+                self.raise_error("Expected a stage")
+            else:
+                # the tokenizer keeps the rest of a REMOVE as a single string, so parse that string
+                tokens = self.dialect.tokenize(rest.this)
+                (files,) = self.dialect.parser(error_level=self.error_level).parse_into(StageFiles, tokens, rest.this)
+                assert isinstance(files, StageFiles)
+                command.set("remove_stage", files.this)
+                command.set("remove_pattern", files.args.get("pattern"))
+            return command
+
+        def _parse_stage_files(self) -> StageFiles:
+            if self._match(TokenType.STRING):
+                # a quoted stage location, which may contain spaces
+                location: exp.Expr = exp.var(self._prev.text)
+            elif self._curr and self._curr.text.startswith("@"):
+                location = self._parse_location_path()
+            else:
+                self.raise_error("Expected a stage")
+                location = exp.var("")
+            pattern = None
+            if self._match_text_seq("PATTERN", "=") and not (pattern := self._parse_string()):
+                self.raise_error("Expected string after PATTERN =")
+            return self.expression(StageFiles(this=location, pattern=pattern))
 
 
 def parse(command: str) -> list[Expr | None]:

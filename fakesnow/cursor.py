@@ -420,6 +420,10 @@ class FakeSnowflakeCursor:
                 copy=False,
             )
             .transform(
+                lambda e: transforms.remove_stage(e, self._conn.database, self._conn.schema, self._conn.table_stages),
+                copy=False,
+            )
+            .transform(
                 lambda e: transforms.put_stage(
                     e, self._conn.database, self._conn.schema, params, self._conn.table_stages
                 ),
@@ -654,7 +658,11 @@ class FakeSnowflakeCursor:
                     sqlstate="42710",
                 )
 
-        elif transformed.args.get("list_stage_name") or transformed.args.get("put_stage_name"):
+        elif (
+            transformed.args.get("list_stage_name")
+            or transformed.args.get("put_stage_name")
+            or transformed.args.get("remove_stage_name")
+        ):
             result_sql = stage.complete_stage_lookup(transformed, self._duck_conn.fetchone())
 
         elif cmd == "INSERT":

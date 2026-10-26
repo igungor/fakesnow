@@ -231,6 +231,33 @@ def list_stage(
     return transformed
 
 
+def remove_stage(
+    expression: Expr, current_database: str | None, current_schema: str | None, table_stages: TableStages
+) -> Expr:
+    """Transform REMOVE to a lookup of the stage, whose files are removed once it resolves.
+
+    See https://docs.snowflake.com/en/sql-reference/sql/remove
+    """
+    if not (isinstance(expression, exp.Command) and (location := expression.args.get("remove_stage"))):
+        return expression
+
+    if expression.args.get("remove_pattern") is not None:
+        raise NotImplementedError("REMOVE with PATTERN")
+
+    argument = location.name
+    if not argument.startswith("@"):
+        raise snowflake.connector.errors.ProgrammingError(
+            msg="SQL compilation error:\nsyntax error in REMOVE stage reference.", errno=1003, sqlstate="42000"
+        )
+    var, _, path = argument[1:].partition("/")
+    catalog, schema, stage_name = parts_from_var(var, current_database=current_database, current_schema=current_schema)
+
+    transformed = sqlglot.parse_one(stage_lookup_sql(catalog, schema, stage_name, table_stages), read="duckdb")
+    transformed.args["remove_stage_name"] = f"{catalog}.{schema}.{stage_name}"
+    transformed.args["remove_stage_path"] = path
+    return transformed
+
+
 def put_stage(
     expression: Expr,
     current_database: str | None,
@@ -334,13 +361,19 @@ def stage_lookup_sql(catalog: str, schema: str, stage_name: str, table_stages: T
 
 
 def complete_stage_lookup(expression: Expr, result: tuple | None) -> str:
-    """Complete PUT/LIST using resolved storage without leaking lookup details to the cursor."""
-    stage_name = expression.args.get("list_stage_name") or expression.args["put_stage_name"]
+    """Complete PUT/LIST/REMOVE using resolved storage without leaking lookup details to the cursor."""
+    stage_name = (
+        expression.args.get("list_stage_name")
+        or expression.args.get("remove_stage_name")
+        or expression.args["put_stage_name"]
+    )
     if result is None:
         raise not_found_error(stage_name)
     storage_name = result[0]
     if expression.args.get("list_stage_name"):
         return list_stage_files_sql(storage_name, expression.args["list_stage_path"])
+    if expression.args.get("remove_stage_name"):
+        return remove_stage_files_sql(storage_name, expression.args["remove_stage_path"])
     expression.args["put_stage_data"]["stageInfo"]["location"] = internal_dir(
         storage_name, expression.args["put_stage_path"]
     )
@@ -436,6 +469,25 @@ def list_stage_files_sql(stage_name: str, path: str = "") -> str:
         from read_blob({glob})
         where starts_with(filename, {starts_with})
     """
+
+
+def remove_stage_files_sql(stage_name: str, path: str = "") -> str:
+    """Remove the stage's files whose path within the stage starts with path, and generate SQL that reports them,
+    matching Snowflake's REMOVE output format."""
+    sdir = internal_dir(stage_name)
+    prefix = _file_name_prefix(stage_name.rsplit(".", 1)[-1])
+    removed = []
+    for root, _dirs, files in os.walk(sdir):
+        for file in files:
+            full = os.path.join(root, file)
+            if (relative := full[len(sdir) :]).startswith(path):
+                os.remove(full)
+                removed.append(f"{prefix}{relative}")
+
+    if not removed:
+        return "SELECT NULL::VARCHAR AS name, NULL::VARCHAR AS result WHERE FALSE"
+    values = exp.values([(name, "removed") for name in sorted(removed)], alias="t", columns=["name", "result"])
+    return exp.select("*").from_(values).sql(dialect="duckdb")
 
 
 def upload_files(put_stage_data: UploadCommandDict) -> list[dict[str, Any]]:

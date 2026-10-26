@@ -398,3 +398,46 @@ def test_list_path(stage_files: snowflake.connector.cursor.DictCursor) -> None:
 
     stage_files.execute("LS @files_stage/b")
     assert [r["name"] for r in stage_files.fetchall()] == ["files_stage/b1.csv.gz"]
+
+
+def test_remove_file(stage_files: snowflake.connector.cursor.DictCursor) -> None:
+    stage_files.execute("RM @files_stage/dir/a1.csv.gz")
+    assert stage_files.fetchall() == [{"name": "files_stage/dir/a1.csv.gz", "result": "removed"}]
+
+    stage_files.execute("LIST @files_stage")
+    assert [r["name"] for r in stage_files.fetchall()] == ["files_stage/b1.csv.gz", "files_stage/dir/a2.csv.gz"]
+
+
+def test_remove_path(stage_files: snowflake.connector.cursor.DictCursor) -> None:
+    stage_files.execute("REMOVE @files_stage/dir/")
+    assert [r["name"] for r in stage_files.fetchall()] == ["files_stage/dir/a1.csv.gz", "files_stage/dir/a2.csv.gz"]
+
+    stage_files.execute("LIST @files_stage")
+    assert [r["name"] for r in stage_files.fetchall()] == ["files_stage/b1.csv.gz"]
+
+
+def test_remove_no_match(stage_files: snowflake.connector.cursor.DictCursor) -> None:
+    stage_files.execute("REMOVE @files_stage/nothing")
+    assert stage_files.fetchall() == []
+
+
+def test_remove_stage(stage_files: snowflake.connector.cursor.DictCursor) -> None:
+    stage_files.execute("REMOVE @files_stage")
+    assert len(stage_files.fetchall()) == 3
+
+    stage_files.execute("LIST @files_stage")
+    assert stage_files.fetchall() == []
+
+
+def test_remove_missing_stage(cur: snowflake.connector.cursor.SnowflakeCursor) -> None:
+    with pytest.raises(snowflake.connector.errors.ProgrammingError) as excinfo:
+        cur.execute("REMOVE @missing_stage/file.csv")
+    assert str(excinfo.value) == (
+        "002003 (02000): SQL compilation error:\nStage 'DB1.SCHEMA1.MISSING_STAGE' does not exist or not authorized."
+    )
+
+
+def test_remove_requires_stage(cur: snowflake.connector.cursor.SnowflakeCursor) -> None:
+    with pytest.raises(snowflake.connector.errors.ProgrammingError) as excinfo:
+        cur.execute("REMOVE")
+    assert excinfo.value.errno == 1003
