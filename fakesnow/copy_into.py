@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from glob import escape as glob_escape
+from pathlib import PurePath
 from typing import Any, NamedTuple, Protocol, cast
 from urllib.parse import urlparse, urlunparse
 
@@ -363,6 +364,9 @@ def stage_url_from_var(
 
 def _source_urls(source: str, files: list[str]) -> list[str]:
     """Convert from_source to a list of URLs."""
+    if stage.is_internal(source):
+        return [_internal_file(source, file) for file in files] or [source]
+
     scheme, netloc, path, params, query, fragment = urlparse(source)
     if not scheme:
         raise snowflake.connector.errors.ProgrammingError(
@@ -371,6 +375,22 @@ def _source_urls(source: str, files: list[str]) -> list[str]:
 
     # rebuild url from components to ensure correct handling of host slash
     return [_urlunparse(scheme, netloc, path, params, query, fragment, file) for file in files] or [source]
+
+
+def _internal_file(source: str, file: str) -> str:
+    """The path of a file named in FILES within an internal stage, which must exist."""
+    path = f"{source.rstrip('/')}/{file}"
+    if not PurePath(os.path.realpath(path)).is_relative_to(os.path.realpath(source)) or not os.path.isfile(path):
+        raise snowflake.connector.errors.ProgrammingError(
+            msg=(
+                f"Remote file '{stage.internal_file_name(source)}{file}' was not found. If you are running a copy "
+                "command, please make sure files are not deleted when they are being loaded or files are not being "
+                "loaded into two different tables concurrently with auto purge option."
+            ),
+            errno=91016,
+            sqlstate="22000",
+        )
+    return path
 
 
 def _source_glob(source: str, duck_conn: DuckDBPyConnection) -> list[str]:

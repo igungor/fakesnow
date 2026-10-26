@@ -287,6 +287,43 @@ def test_copy_internal_stage_path(dcur: snowflake.connector.cursor.DictCursor) -
         assert dcur.fetchall() == [{"A": 3, "B": 4}]
 
 
+def test_copy_internal_stage_files(dcur: snowflake.connector.cursor.DictCursor) -> None:
+    create_table(dcur)
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        for name, data in (("first.csv", "1,2\n"), ("second.csv", "3,4\n")):
+            with open(f"{tmp_dir}/{name}", "w") as f:
+                f.write(data)
+
+        dcur.execute("CREATE STAGE copy_files_stage")
+        dcur.execute(f"PUT 'file://{tmp_dir}/first.csv' @copy_files_stage/dir")
+        dcur.execute(f"PUT 'file://{tmp_dir}/second.csv' @copy_files_stage/dir")
+
+        dcur.execute("COPY INTO table1 FROM @copy_files_stage FILES = ('dir/second.csv.gz')")
+        assert [r["file"] for r in dcur.fetchall()] == ["copy_files_stage/dir/second.csv.gz"]
+
+        dcur.execute("SELECT * FROM table1")
+        assert dcur.fetchall() == [{"A": 3, "B": 4}]
+
+
+def test_copy_internal_stage_files_missing(dcur: snowflake.connector.cursor.DictCursor) -> None:
+    create_table(dcur)
+    dcur.execute("CREATE STAGE files_missing_stage")
+
+    with pytest.raises(snowflake.connector.errors.ProgrammingError) as excinfo:
+        dcur.execute("COPY INTO table1 FROM @files_missing_stage FILES = ('missing.csv')")
+    assert excinfo.value.errno == 91016
+    assert "Remote file 'files_missing_stage/missing.csv' was not found." in str(excinfo.value)
+
+
+def test_copy_internal_stage_files_outside_stage(dcur: snowflake.connector.cursor.DictCursor) -> None:
+    create_table(dcur)
+    dcur.execute("CREATE STAGE files_outside_stage")
+
+    with pytest.raises(snowflake.connector.errors.ProgrammingError) as excinfo:
+        dcur.execute("COPY INTO table1 FROM @files_outside_stage FILES = ('../../../../etc/hosts')")
+    assert excinfo.value.errno == 91016
+
+
 @pytest.fixture
 def directory_stage(dcur: snowflake.connector.cursor.DictCursor) -> None:
     create_table(dcur)
@@ -429,7 +466,6 @@ def test_copy_json_single_variant_column(dcur: snowflake.connector.cursor.DictCu
         dcur.execute("SELECT record FROM json_table1 ORDER BY record:a")
         # each newline delimited JSON object is loaded as a row
         assert dindent(dcur.fetchall()) == [{"RECORD": '{\n  "a": 1\n}'}, {"RECORD": '{\n  "a": 2\n}'}]
-
 
 def test_put_table_stage_non_existent_table(dcur: snowflake.connector.cursor.DictCursor) -> None:
     with tempfile.NamedTemporaryFile(mode="w+", suffix=".csv") as temp_file:
