@@ -433,7 +433,9 @@ def _inserts(
     if isinstance(from_, exp.Subquery):
         select = from_.this
         assert isinstance(select, exp.Select), f"{select.__class__} is not a Select"
-        columns = _strip_json_extract(select).expressions
+        columns = (
+            _json_value(select) if isinstance(params.file_format, ReadJSON) else _strip_json_extract(select)
+        ).expressions
         # Subquery already specifies columns explicitly, don't use BY NAME
         return [
             exp.Insert(
@@ -563,6 +565,17 @@ def _match_parquet_columns(
     # CASE_INSENSITIVE
     parquet_lookup = {name.upper(): name for name in parquet_col_names}
     return {tc: parquet_lookup[tc] for tc in target_columns if tc in parquet_lookup}
+
+
+def _json_value(expr: exp.Select) -> exp.Select:
+    """Replace $1, the JSON value of each row, with the column read_json_objects reads it into."""
+    dollar1 = exp.Parameter(this=exp.Literal(this="1", is_string=False))
+
+    for p in list(expr.find_all(exp.Parameter)):
+        if p == dollar1:
+            p.replace(exp.Column(this=exp.Identifier(this="json", quoted=True)))
+
+    return expr
 
 
 def _strip_json_extract(expr: exp.Select) -> exp.Select:

@@ -467,6 +467,27 @@ def test_copy_json_single_variant_column(dcur: snowflake.connector.cursor.DictCu
         # each newline delimited JSON object is loaded as a row
         assert dindent(dcur.fetchall()) == [{"RECORD": '{\n  "a": 1\n}'}, {"RECORD": '{\n  "a": 2\n}'}]
 
+
+def test_copy_json_transformation(dcur: snowflake.connector.cursor.DictCursor) -> None:
+    dcur.execute("CREATE TABLE json_table2 (meta VARIANT, content VARIANT, id INT)")
+    with tempfile.NamedTemporaryFile(mode="w+", suffix=".json") as temp_file:
+        temp_file.write('{"meta": {"offset": 1}, "content": {"id": 7}}\n{"meta": {"offset": 2}}\n')
+        temp_file.flush()
+
+        dcur.execute("CREATE STAGE json_stage2")
+        dcur.execute(f"PUT 'file://{temp_file.name}' @json_stage2")
+        dcur.execute(
+            "COPY INTO json_table2 (meta, content, id) FROM (SELECT $1:meta, $1:content, $1:content:id FROM @json_stage2 t) "
+            "FILE_FORMAT = (TYPE = 'json')"
+        )
+
+        dcur.execute("SELECT meta:offset::int AS o, content, id FROM json_table2 ORDER BY o")
+        assert dindent(dcur.fetchall()) == [
+            {"O": 1, "CONTENT": '{\n  "id": 7\n}', "ID": 7},
+            {"O": 2, "CONTENT": None, "ID": None},
+        ]
+
+
 def test_put_table_stage_non_existent_table(dcur: snowflake.connector.cursor.DictCursor) -> None:
     with tempfile.NamedTemporaryFile(mode="w+", suffix=".csv") as temp_file:
         temp_file_path = temp_file.name
