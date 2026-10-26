@@ -28,6 +28,7 @@ import fakesnow.info_schema as info_schema
 import fakesnow.macros as macros
 import fakesnow.transforms as transforms
 from fakesnow import logger
+from fakesnow.arrow import narrow_hugeints
 from fakesnow.copy_into import copy_into
 from fakesnow.dialect import parse_one, syntax_error
 from fakesnow.params import MutableParams
@@ -727,8 +728,10 @@ class FakeSnowflakeCursor:
             logger.log_sql(result_sql)
             self._duck_conn.execute(result_sql)
 
-        self._arrow_table = self._duck_conn.to_arrow_table()
-        assert self._arrow_table is not None
+        duckdb_types = [str(d[1]) for d in self._duck_conn.description or []]
+        arrow_table = self._duck_conn.to_arrow_table()
+        assert arrow_table is not None
+        self._arrow_table = narrow_hugeints(arrow_table, duckdb_types)
         if transformed.args.get("merge_counts"):
             # a merge returns a count per operation, but snowflake reports their total as the
             # rows affected, not the single row those counts are in

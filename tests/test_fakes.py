@@ -474,6 +474,13 @@ def test_percentile_cont(conn: snowflake.connector.SnowflakeConnection):
     ]
 
 
+def test_number_holds_38_digits(cur: snowflake.connector.cursor.SnowflakeCursor):
+    cur.execute("create or replace table example (n number, i int)")
+    cur.execute("insert into example values (12345678901234567890123456789012345678, 9223372036854776000)")
+    cur.execute("select n, i from example")
+    assert cur.fetchall() == [(12345678901234567890123456789012345678, 9223372036854776000)]
+
+
 def test_quoted_identifiers_ignore_case(dcur: snowflake.connector.cursor.SnowflakeCursor) -> None:
     dcur.execute("alter session set quoted_identifiers_ignore_case = true")
     assert dcur.fetchall() == [{"status": "Statement executed successfully."}]

@@ -106,3 +106,28 @@ def timestamp_to_sf_struct(ts: pa.Array | pa.ChunkedArray) -> pa.Array:
                 pa.field("fraction", nullable=False, type=pa.int32()),
             ],
         )
+
+
+INT64_MIN = -(2**63)
+INT64_MAX = 2**63 - 1
+
+
+def narrow_hugeints(table: pa.Table, duckdb_types: list[str]) -> pa.Table:
+    """Return duckdb's 128-bit integers, ie: snowflake's NUMBER(38,0), as 64-bit integers when they fit.
+
+    duckdb returns them as 38 digit decimals, but snowflake picks the narrowest integer that holds a
+    column's values, and clients return an integer rather than a decimal.
+    """
+    columns = []
+    for column, duckdb_type in zip(table.columns, duckdb_types, strict=True):
+        if duckdb_type == "HUGEINT" and pa.types.is_decimal(column.type) and _fits_int64(column):
+            column = column.cast(pa.int64())
+        columns.append(column)
+    schema = pa.schema([f.with_type(c.type) for f, c in zip(table.schema, columns, strict=True)])
+    return pa.Table.from_arrays(columns, schema=schema)
+
+
+def _fits_int64(column: pa.ChunkedArray) -> bool:
+    bounds = pc.min_max(column)
+    low, high = bounds["min"].as_py(), bounds["max"].as_py()
+    return low is None or (low >= INT64_MIN and high <= INT64_MAX)

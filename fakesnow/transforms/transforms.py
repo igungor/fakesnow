@@ -793,17 +793,23 @@ NUMBER_38_0 = [
 
 
 def integer_precision(expression: Expr) -> Expr:
-    """Convert integers and number(38,0) to bigint.
+    """Convert integers and number(38,0) to hugeint, which holds all 38 digits of a snowflake integer.
 
-    So fetch_all will return int and dataframes will return them with a dtype of int64.
+    Results return them as 64-bit integers when they fit, so fetch_all will return int and dataframes
+    will return them with a dtype of int64.
     """
     if (
         isinstance(expression, exp.DataType)
         and expression.this == exp.DataType.Type.DECIMAL
         and (not expression.expressions or expression.expressions == NUMBER_38_0)
-    ) or expression.this in (exp.DataType.Type.INT, exp.DataType.Type.SMALLINT, exp.DataType.Type.TINYINT):
+    ) or expression.this in (
+        exp.DataType.Type.INT,
+        exp.DataType.Type.BIGINT,
+        exp.DataType.Type.SMALLINT,
+        exp.DataType.Type.TINYINT,
+    ):
         return exp.DataType(
-            this=exp.DataType.Type.BIGINT,
+            this=exp.DataType.Type.INT128,
             nested=False,
             prefix=False,
         )

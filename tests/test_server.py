@@ -290,6 +290,13 @@ def test_server_json_result_format_real(server: dict) -> None:
         assert cur.fetchall() == [(3.140000105,)]
 
 
+def test_server_number_holds_38_digits(scur: snowflake.connector.cursor.SnowflakeCursor) -> None:
+    scur.execute("create or replace table example (n number)")
+    scur.execute("insert into example values (12345678901234567890123456789012345678), (1)")
+    scur.execute("select n from example order by n")
+    assert scur.fetchall() == [(1,), (12345678901234567890123456789012345678,)]
+
+
 def test_server_explicit_begin(scur: snowflake.connector.cursor.SnowflakeCursor) -> None:
     # clients that manage transactions themselves send BEGIN rather than relying on the
     # connector, eg: database/sql in Go calls it from Tx.Begin

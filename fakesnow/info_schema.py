@@ -91,7 +91,7 @@ select
     columns.ordinal_position AS ORDINAL_POSITION,
     columns.column_default AS COLUMN_DEFAULT,
     columns.is_nullable AS IS_NULLABLE,
-case when starts_with(columns.data_type, 'DECIMAL') or columns.data_type='BIGINT' then 'NUMBER'
+case when starts_with(columns.data_type, 'DECIMAL') or columns.data_type in ('BIGINT', 'HUGEINT') then 'NUMBER'
      when columns.data_type='VARCHAR' then 'TEXT'
      when columns.data_type='DOUBLE' then 'FLOAT'
      when columns.data_type='BLOB' then 'BINARY'
@@ -100,10 +100,10 @@ case when starts_with(columns.data_type, 'DECIMAL') or columns.data_type='BIGINT
      when columns.data_type='JSON' then 'VARIANT'
      else columns.data_type end as DATA_TYPE,
 ext_character_maximum_length as CHARACTER_MAXIMUM_LENGTH, ext_character_octet_length as CHARACTER_OCTET_LENGTH,
-case when columns.data_type='BIGINT' then 38
+case when columns.data_type in ('BIGINT', 'HUGEINT') then 38
      when columns.data_type='DOUBLE' then NULL
     else columns.numeric_precision end as NUMERIC_PRECISION,
-case when columns.data_type='BIGINT' then 10
+case when columns.data_type in ('BIGINT', 'HUGEINT') then 10
     when columns.data_type='DOUBLE' then NULL
     else columns.numeric_precision_radix end as NUMERIC_PRECISION_RADIX,
 case when columns.data_type='DOUBLE' then NULL else columns.numeric_scale end as NUMERIC_SCALE,
