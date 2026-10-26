@@ -7,6 +7,7 @@ from typing import cast
 import pytest
 import pytz
 import snowflake.connector.cursor
+import snowflake.connector.errors
 
 
 def test_show_columns(dcur: snowflake.connector.cursor.SnowflakeCursor):
@@ -112,6 +113,32 @@ def test_show_columns_decimal_default(dcur: snowflake.connector.cursor.Snowflake
     dcur.execute("show columns in example")
     rows = cast(list[dict], dcur.fetchall())
     assert [(r["column_name"], r["default"]) for r in rows] == [("A", "12.34"), ("B", "-1.5"), ("C", "10")]
+
+
+def test_show_grants_on_table(dcur: snowflake.connector.cursor.SnowflakeCursor):
+    dcur.execute("create or replace table example (x int)")
+    dcur.execute("show grants on table identifier('example')")
+    assert dcur.fetchall() == [
+        {
+            "created_on": datetime.datetime(1970, 1, 1, 0, 0, tzinfo=pytz.utc),
+            "privilege": "OWNERSHIP",
+            "granted_on": "TABLE",
+            "name": "DB1.SCHEMA1.EXAMPLE",
+            "granted_to": "ROLE",
+            "grantee_name": "SYSADMIN",
+            "grant_option": "true",
+            "granted_by": "SYSADMIN",
+        }
+    ]
+
+
+def test_show_grants_on_missing_table(dcur: snowflake.connector.cursor.SnowflakeCursor):
+    with pytest.raises(snowflake.connector.errors.ProgrammingError) as excinfo:
+        dcur.execute("show grants on table missing")
+    assert (
+        str(excinfo.value)
+        == "002003 (02000): SQL compilation error:\nTable 'MISSING' does not exist or not authorized."
+    )
 
 
 def test_show_databases(dcur: snowflake.connector.cursor.SnowflakeCursor):

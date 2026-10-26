@@ -23,14 +23,18 @@ class StageFiles(Expression):
 
 class FakeSnowflake(Snowflake):
     """Snowflake's dialect with the statements sqlglot doesn't parse yet: CREATE, DESCRIBE, DROP and SHOW
-    of pipes, and the stage and pattern of a REMOVE.
+    of pipes, SHOW GRANTS ON a table or view, and the stage and pattern of a REMOVE.
 
     A REMOVE stays a Command, so it generates as written, with its stage in the "remove_stage" arg and its
     pattern in "remove_pattern".
     """
 
     class Parser(Snowflake.Parser):
-        SHOW_PARSERS: ClassVar = {**Snowflake.Parser.SHOW_PARSERS, "PIPES": _show_parser("PIPES")}
+        SHOW_PARSERS: ClassVar = {
+            **Snowflake.Parser.SHOW_PARSERS,
+            "PIPES": _show_parser("PIPES"),
+            "GRANTS": lambda self: self._parse_show_grants(),
+        }
         SHOW_TRIE: ClassVar = new_trie(key.split(" ") for key in SHOW_PARSERS)
         EXPRESSION_PARSERS: ClassVar = {
             **Snowflake.Parser.EXPRESSION_PARSERS,
@@ -64,6 +68,16 @@ class FakeSnowflake(Snowflake):
             )
             create.set("pipe_definition", self._find_sql(start, self._prev))
             return create
+
+        def _parse_show_grants(self) -> exp.Show | exp.Command:
+            index = self._index
+            if self._match(TokenType.ON) and self._match_texts(("TABLE", "VIEW")):
+                kind = self._prev.text.upper()
+                return self.expression(exp.Show(this="GRANTS", scope_kind=kind, scope=self._parse_table_parts()))
+
+            # the other forms, eg: SHOW GRANTS TO ROLE, stay commands, from the SHOW they start with
+            self._retreat(index)
+            return self._parse_as_command(self._tokens[index - 2])
 
         def _parse_describe(self) -> exp.Describe:
             if self._match_text_seq("PIPE"):

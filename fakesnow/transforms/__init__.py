@@ -21,6 +21,7 @@ from fakesnow.transforms.show import (
     show_columns as show_columns,
     show_databases as show_databases,
     show_functions as show_functions,
+    show_grants as show_grants,
     show_keys as show_keys,
     show_parameters as show_parameters,
     show_procedures as show_procedures,

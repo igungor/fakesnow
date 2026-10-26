@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Literal
 
+import snowflake.connector.errors
 import sqlglot
+from duckdb import DuckDBPyConnection
 from sqlglot import Expr, TokenType, exp
 
 
@@ -731,3 +733,50 @@ def show_warehouses(expression: Expr) -> Expr:
         return sqlglot.parse_one(SQL_SHOW_WAREHOUSES, read="duckdb")
 
     return expression
+
+
+def show_grants(
+    expression: Expr, duck_conn: DuckDBPyConnection, current_database: str | None, current_schema: str | None
+) -> Expr:
+    """Transform SHOW GRANTS ON TABLE or VIEW to the grants fakesnow has, ie: the owner's OWNERSHIP.
+
+    fakesnow has no access control, and SYSADMIN owns every object, as SHOW TABLES reports.
+
+    See https://docs.snowflake.com/en/sql-reference/sql/show-grants
+    """
+    if not (
+        isinstance(expression, exp.Show)
+        and expression.name.upper() == "GRANTS"
+        and (kind := expression.args.get("scope_kind")) in ("TABLE", "VIEW")
+        and isinstance(table := expression.args.get("scope"), exp.Table)
+    ):
+        return expression
+
+    catalog = table.catalog or current_database
+    schema = table.db or current_schema
+    duck_conn.execute(
+        "SELECT 1 FROM information_schema.tables WHERE table_catalog = ? AND table_schema = ? AND table_name = ?",
+        [catalog, schema, table.name],
+    )
+    if not duck_conn.fetchone():
+        raise snowflake.connector.errors.ProgrammingError(
+            msg=f"SQL compilation error:\n{kind.capitalize()} '{table.name}' does not exist or not authorized.",
+            errno=2003,
+            sqlstate="02000",
+        )
+
+    name = exp.Literal.string(f"{catalog}.{schema}.{table.name}").sql(dialect="duckdb")
+    return sqlglot.parse_one(
+        f"""
+        SELECT
+            to_timestamp(0)::timestamptz AS created_on,
+            'OWNERSHIP' AS privilege,
+            '{kind}' AS granted_on,
+            {name} AS name,
+            'ROLE' AS granted_to,
+            'SYSADMIN' AS grantee_name,
+            'true' AS grant_option,
+            'SYSADMIN' AS granted_by
+        """,
+        read="duckdb",
+    )
