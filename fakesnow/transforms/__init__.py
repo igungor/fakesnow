@@ -38,7 +38,6 @@ from fakesnow.transforms.transforms import (
     array_agg_within_group as array_agg_within_group,
     array_construct_etc as array_construct_etc,
     array_size as array_size,
-    assignment_casts as assignment_casts,
     create_clone as create_clone,
     create_database as create_database,
     create_table_as as create_table_as,
@@ -95,6 +94,10 @@ from fakesnow.transforms.transforms import (
     upper_case_quoted_identifiers as upper_case_quoted_identifiers,
     upper_case_unquoted_identifiers as upper_case_unquoted_identifiers,
     values_columns as values_columns,
+)
+from fakesnow.transforms.variant import (
+    Types as Types,
+    assignment_casts as assignment_casts,
     variant_as_varchar_argument as variant_as_varchar_argument,
     variant_ordering as variant_ordering,
 )

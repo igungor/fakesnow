@@ -306,6 +306,13 @@ class FakeSnowflakeCursor:
             )
 
     def _transform(self, expression: Expr, params: MutableParams | None) -> Expr:
+        types = transforms.Types(self._duck_conn, self._conn.database, self._conn.schema)
+        try:
+            return self._transform_with_types(expression, params, types)
+        finally:
+            types.close()
+
+    def _transform_with_types(self, expression: Expr, params: MutableParams | None, types: transforms.Types) -> Expr:
         return (
             expression.transform(lambda e: transforms.identifier(e, params), copy=False)
             .transform(transforms.upper_case_unquoted_identifiers, copy=False)
@@ -331,12 +338,6 @@ class FakeSnowflakeCursor:
             .transform(transforms.json_extract_cast_as_varchar, copy=False)
             .transform(transforms.json_extract_cased_as_varchar, copy=False)
             .transform(transforms.json_extract_compared_to_string, copy=False)
-            .transform(transforms.variant_as_varchar_argument, copy=False)
-            .transform(transforms.variant_ordering, copy=False)
-            .transform(
-                lambda e: transforms.assignment_casts(e, self._duck_conn, self._conn.database, self._conn.schema),
-                copy=False,
-            )
             .transform(transforms.json_extract_precedence, copy=False)
             .transform(transforms.flatten_value_cast_as_varchar, copy=False)
             .transform(transforms.flatten, copy=False)
@@ -403,6 +404,10 @@ class FakeSnowflakeCursor:
                 copy=False,
             )
             .transform(lambda e: transforms.create_table_as(e, self._duck_conn), copy=False)
+            # these look up the types of expressions, so they run on the statement duckdb will execute
+            .transform(lambda e: transforms.variant_as_varchar_argument(e, types), copy=False)
+            .transform(lambda e: transforms.variant_ordering(e, types), copy=False)
+            .transform(lambda e: transforms.assignment_casts(e, types), copy=False)
         )
 
     def _transform_explode(self, expression: Expr) -> list[Expr]:

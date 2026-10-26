@@ -160,6 +160,14 @@ def test_update_variant_into_varchar(cur: snowflake.connector.cursor.SnowflakeCu
     assert cur.fetchall() == [("b",)]
 
 
+def test_update_variant_column_with_variant(cur: snowflake.connector.cursor.SnowflakeCursor):
+    cur.execute("create table example (v variant)")
+    cur.execute("insert into example select parse_json('1')")
+    cur.execute("""update example set v = parse_json('{"a": 2}'):a""")
+    cur.execute("select v from example")
+    assert cur.fetchall() == [("2",)]
+
+
 def test_insert_variant_into_variant(cur: snowflake.connector.cursor.SnowflakeCursor):
     cur.execute("create table example (v variant)")
     cur.execute("""insert into example select parse_json('"abc"')""")
@@ -183,9 +191,20 @@ def test_order_by_variant(cur: snowflake.connector.cursor.SnowflakeCursor):
 
 
 def test_min_max_variant(cur: snowflake.connector.cursor.SnowflakeCursor):
-    # only semi-structured expressions, eg: a path, are compared as snowflake does, not columns of type variant
-    cur.execute("select min(parse_json(column1)), max(parse_json(column1)) from values ('9'), ('10'), ('2'), ('10.0')")
-    assert cur.fetchall() == [("2", "10")]
+    cur.execute("select min(v), max(v) from (select parse_json(column1) v from values ('9'), ('10'), ('2'), ('10.1'))")
+    assert cur.fetchall() == [("2", "10.1")]
+
+
+def test_order_by_variant_column(cur: snowflake.connector.cursor.SnowflakeCursor):
+    cur.execute("create table example (v variant)")
+    cur.execute("insert into example select parse_json(column1) from values ('9'), ('10'), ('2')")
+    cur.execute("select v as id from example order by id")
+    assert cur.fetchall() == [("2",), ("9",), ("10",)]
+
+
+def test_partition_by_variant(cur: snowflake.connector.cursor.SnowflakeCursor):
+    cur.execute("select count(*) over (partition by parse_json(column1)) from values ('1'), ('1.0'), ('2') order by 1")
+    assert cur.fetchall() == [(1,), (2,), (2,)]
 
 
 def test_count_distinct_variant(cur: snowflake.connector.cursor.SnowflakeCursor):
@@ -401,3 +420,14 @@ def test_try_parse_json(dcur: snowflake.connector.cursor.DictCursor):
 
     dcur.execute("""SELECT TRY_PARSE_JSON('{invalid: ,]') AS j""")
     assert dcur.fetchall() == [{"J": None}]
+
+
+def test_correlated_variant_in_transaction(cur: snowflake.connector.cursor.SnowflakeCursor):
+    # the inner max references the outer query, so its type can't be described on its own, which mustn't
+    # abort the transaction
+    cur.execute("create table example (id int, v variant)")
+    cur.execute("begin")
+    cur.execute("insert into example select 1, parse_json('10')")
+    cur.execute("select (select max(x.v) from example x where x.id = o.id) from example o")
+    assert cur.fetchall() == [("10",)]
+    cur.execute("commit")
