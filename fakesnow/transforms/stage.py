@@ -510,6 +510,7 @@ def list_stage_files_sql(stage_name: str, path: str = "") -> str:
             strftime(last_modified, '%a, %d %b %Y %H:%M:%S GMT') as last_modified
         from read_blob({glob})
         where starts_with(filename, {starts_with})
+        order by name
     """
 
 
