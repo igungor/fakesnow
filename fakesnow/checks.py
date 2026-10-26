@@ -87,8 +87,8 @@ def _missing_qualifiers(node: exp.Table) -> tuple[bool, bool]:
             # "CREATE/DROP SCHEMA"
             no_database = not node.args.get("catalog")
             no_schema = False
-        elif parent_kind.upper() in {"TABLE", "VIEW", "STAGE", "TAG", "SEQUENCE", "FILE FORMAT"}:
-            # "CREATE/DROP TABLE/VIEW/STAGE/TAG/FILE FORMAT"
+        elif parent_kind.upper() in {"TABLE", "VIEW", "STAGE", "PIPE", "TAG", "SEQUENCE", "FILE FORMAT"}:
+            # "CREATE/DROP TABLE/VIEW/STAGE/PIPE/TAG/FILE FORMAT"
             no_database = not node.args.get("catalog")
             no_schema = not node.args.get("db")
         else:

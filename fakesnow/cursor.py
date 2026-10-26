@@ -54,6 +54,7 @@ SQL_CREATED_SECRET = Template("SELECT 'Secret ${name} successfully created.' as 
 SQL_CREATED_TABLE = Template("SELECT 'Table ${name} successfully created.' as 'status'")
 SQL_CREATED_VIEW = Template("SELECT 'View ${name} successfully created.' as 'status'")
 SQL_CREATED_STAGE = Template("SELECT 'Stage area ${name} successfully created.' as status")
+SQL_CREATED_PIPE = Template("SELECT 'Pipe ${name} successfully created.' as status")
 SQL_OBJECT_EXISTS = Template("SELECT '${name} already exists, statement succeeded.' as status")
 SQL_CREATED_FILE_FORMAT = Template("SELECT 'File format ${name} successfully created.' as status")
 SQL_DROPPED = Template("SELECT '${name} successfully dropped.' as 'status'")
@@ -381,6 +382,15 @@ class FakeSnowflakeCursor:
             .transform(lambda e: transforms.show_tables_etc(e, self._conn.database, self._conn.schema), copy=False)
             .transform(lambda e: transforms.show_columns(e, self._conn.database, self._conn.schema), copy=False)
             .transform(lambda e: transforms.show_stages(e, self._conn.database, self._conn.schema), copy=False)
+            .transform(lambda e: transforms.show_pipes(e, self._conn.database, self._conn.schema), copy=False)
+            .transform(
+                lambda e: transforms.describe_pipe(e, self._duck_conn, self._conn.database, self._conn.schema),
+                copy=False,
+            )
+            .transform(
+                lambda e: transforms.drop_pipe(e, self._duck_conn, self._conn.database, self._conn.schema),
+                copy=False,
+            )
             .transform(lambda e: transforms.show_sequences(e, self._conn.database, self._conn.schema), copy=False)
             # TODO collapse into a single show_keys function
             .transform(lambda e: transforms.show_keys(e, self._conn.database, kind="PRIMARY"), copy=False)
@@ -398,6 +408,12 @@ class FakeSnowflakeCursor:
             .transform(transforms.alter_table_strip_cluster_by, copy=False)
             .transform(transforms.numeric_agg_implicit_cast, copy=False)
             .transform(lambda e: transforms.create_stage(e, self._conn.database, self._conn.schema), copy=False)
+            .transform(
+                lambda e: transforms.create_pipe(
+                    e, self._duck_conn, self._conn.database, self._conn.schema, self._conn.table_stages
+                ),
+                copy=False,
+            )
             .transform(lambda e: transforms.create_file_format(e, self._conn.database, self._conn.schema), copy=False)
             .transform(
                 lambda e: transforms.list_stage(e, self._conn.database, self._conn.schema, self._conn.table_stages),
@@ -608,6 +624,22 @@ class FakeSnowflakeCursor:
                     errno=2002,
                     sqlstate="42710",
                 )
+
+        elif pipe_name := transformed.args.get("create_pipe_name"):
+            (affected_count,) = self._duck_conn.fetchall()[0]
+            if affected_count > 0:
+                result_sql = SQL_CREATED_PIPE.substitute(name=pipe_name)
+            elif transformed.args.get("create_pipe_if_not_exists"):
+                result_sql = SQL_OBJECT_EXISTS.substitute(name=pipe_name)
+            else:
+                raise snowflake.connector.errors.ProgrammingError(
+                    msg=f"SQL compilation error:\nObject '{pipe_name}' already exists.",
+                    errno=2002,
+                    sqlstate="42710",
+                )
+
+        elif pipe_name := transformed.args.get("drop_pipe_name"):
+            result_sql = SQL_DROPPED.substitute(name=pipe_name)
 
         elif format_name := transformed.args.get("create_file_format_name"):
             assert affected_count is not None

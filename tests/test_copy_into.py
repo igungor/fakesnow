@@ -20,7 +20,7 @@ from mypy_boto3_s3 import S3Client
 from sqlglot import exp
 
 from fakesnow import logger
-from fakesnow.copy_into import CopyParams, ReadCSV, _from_source, _params, _source_urls, _strip_json_extract
+from fakesnow.copy_into import CopyParams, ReadCSV, _params, _source_urls, _strip_json_extract, from_source
 from tests.utils import dindent
 
 
@@ -1243,8 +1243,8 @@ def test_param_files_single():
     files=('file1.csv')
     """)
     assert params.files == ["file1.csv"]
-    from_source = _from_source(expr)
-    assert _source_urls(from_source, params.files) == ["s3://mybucket/file1.csv"]
+    source = from_source(expr)
+    assert _source_urls(source, params.files) == ["s3://mybucket/file1.csv"]
 
 
 def test_param_files_prefix():
@@ -1254,8 +1254,8 @@ def test_param_files_prefix():
     FILES=('file1.csv')
     """)
     assert params.files == ["file1.csv"]
-    from_source = _from_source(expr)
-    assert _source_urls(from_source, params.files) == ["s3://mybucket/prefile1.csv"]
+    source = from_source(expr)
+    assert _source_urls(source, params.files) == ["s3://mybucket/prefile1.csv"]
 
 
 def test_param_files_prefix_query():
@@ -1265,8 +1265,8 @@ def test_param_files_prefix_query():
     FILES=('file1.csv')
     """)
     assert params.files == ["file1.csv"]
-    from_source = _from_source(expr)
-    assert _source_urls(from_source, params.files) == ["s3://mybucket/pre?query=1file1.csv"]
+    source = from_source(expr)
+    assert _source_urls(source, params.files) == ["s3://mybucket/pre?query=1file1.csv"]
 
 
 def test_param_files_host_without_trailing_slash():
@@ -1276,8 +1276,8 @@ def test_param_files_host_without_trailing_slash():
     FILES=('file1.csv')
     """)
     assert params.files == ["file1.csv"]
-    from_source = _from_source(expr)
-    assert _source_urls(from_source, params.files) == ["s3://mybucket/file1.csv"]
+    source = from_source(expr)
+    assert _source_urls(source, params.files) == ["s3://mybucket/file1.csv"]
 
 
 def test_params_files_multiple():
@@ -1288,8 +1288,8 @@ def test_params_files_multiple():
     """)
 
     assert params.files == ["file1.csv", "file2.csv"]
-    from_source = _from_source(expr)
-    assert _source_urls(from_source, params.files) == ["s3://mybucket/data/file1.csv", "s3://mybucket/data/file2.csv"]
+    source = from_source(expr)
+    assert _source_urls(source, params.files) == ["s3://mybucket/data/file1.csv", "s3://mybucket/data/file2.csv"]
 
 
 def test_load_history_is_per_table(dcur: snowflake.connector.cursor.DictCursor, s3_client: S3Client) -> None:

@@ -11,6 +11,12 @@ from fakesnow.transforms.file_format import (
     create_file_format as create_file_format,
 )
 from fakesnow.transforms.merge import merge as merge
+from fakesnow.transforms.pipe import (
+    create_pipe as create_pipe,
+    describe_pipe as describe_pipe,
+    drop_pipe as drop_pipe,
+    show_pipes as show_pipes,
+)
 from fakesnow.transforms.show import (
     show_columns as show_columns,
     show_databases as show_databases,

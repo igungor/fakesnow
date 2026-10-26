@@ -54,11 +54,11 @@ def copy_into(
     )
 
     table = _extract_table(expr.this)
-    from_source = _from_source(expr)
+    source_ref = from_source(expr)
     source = (
-        stage_url_from_var(from_source[1:], duck_conn, current_database, current_schema, table_stages, table)
-        if from_source.startswith("@")
-        else from_source
+        stage_url_from_var(source_ref[1:], duck_conn, current_database, current_schema, table_stages, table)
+        if source_ref.startswith("@")
+        else source_ref
     )
     urls = _source_urls(source, cparams.files) if cparams.files else _source_glob(source, duck_conn)
     if not urls:
@@ -301,7 +301,7 @@ def _params(
     return CopyParams(force=force, purge=purge, on_error=on_error, **kwargs)
 
 
-def _from_source(expr: exp.Copy) -> str:
+def from_source(expr: exp.Copy) -> str:
     # NB: sqlglot parses the from clause as "files" strangely
     from_ = expr.args["files"][0].this
 
