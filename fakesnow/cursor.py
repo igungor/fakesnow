@@ -384,6 +384,10 @@ class FakeSnowflakeCursor:
             .transform(lambda e: transforms.show_stages(e, self._conn.database, self._conn.schema), copy=False)
             .transform(lambda e: transforms.show_pipes(e, self._conn.database, self._conn.schema), copy=False)
             .transform(
+                lambda e: transforms.describe_stage(e, self._duck_conn, self._conn.database, self._conn.schema),
+                copy=False,
+            )
+            .transform(
                 lambda e: transforms.describe_pipe(e, self._duck_conn, self._conn.database, self._conn.schema),
                 copy=False,
             )

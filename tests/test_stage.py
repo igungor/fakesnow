@@ -4,6 +4,7 @@ import re
 import tempfile
 from datetime import UTC
 from pathlib import Path
+from typing import cast
 
 import pytest
 import snowflake.connector.cursor
@@ -441,3 +442,33 @@ def test_remove_requires_stage(cur: snowflake.connector.cursor.SnowflakeCursor) 
     with pytest.raises(snowflake.connector.errors.ProgrammingError) as excinfo:
         cur.execute("REMOVE")
     assert excinfo.value.errno == 1003
+
+
+def test_describe_stage(dcur: snowflake.connector.cursor.DictCursor) -> None:
+    dcur.execute("CREATE STAGE described_stage")
+    dcur.execute("DESC STAGE described_stage")
+    assert [d.name for d in dcur.description] == [
+        "parent_property",
+        "property",
+        "property_type",
+        "property_value",
+        "property_default",
+    ]
+    rows = {(r["parent_property"], r["property"]): r["property_value"] for r in cast(list[dict], dcur.fetchall())}
+    assert rows[("STAGE_LOCATION", "URL")] == ""
+    assert rows[("DIRECTORY", "ENABLE")] == "false"
+
+
+def test_describe_external_stage(dcur: snowflake.connector.cursor.DictCursor) -> None:
+    dcur.execute("CREATE STAGE external_stage URL='s3://bucket/path/'")
+    dcur.execute("DESCRIBE STAGE identifier('external_stage')")
+    rows = {(r["parent_property"], r["property"]): r["property_value"] for r in cast(list[dict], dcur.fetchall())}
+    assert rows[("STAGE_LOCATION", "URL")] == '["s3://bucket/path/"]'
+
+
+def test_describe_missing_stage(cur: snowflake.connector.cursor.SnowflakeCursor) -> None:
+    with pytest.raises(snowflake.connector.errors.ProgrammingError) as excinfo:
+        cur.execute("DESC STAGE missing_stage")
+    assert str(excinfo.value) == (
+        "002003 (02000): SQL compilation error:\nStage 'DB1.SCHEMA1.MISSING_STAGE' does not exist or not authorized."
+    )

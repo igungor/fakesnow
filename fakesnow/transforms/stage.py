@@ -201,6 +201,48 @@ def create_stage(
     return transformed
 
 
+def describe_stage(
+    expression: Expr, duck_conn: DuckDBPyConnection, current_database: str | None, current_schema: str | None
+) -> Expr:
+    """Transform DESCRIBE STAGE to a select of the stage's properties.
+
+    Only the stage's file format type, location, storage integration and directory table are described, not
+    the rest of its file format, copy options and credentials.
+
+    See https://docs.snowflake.com/en/sql-reference/sql/desc-stage
+    """
+    if not (
+        isinstance(expression, exp.Describe)
+        and str(expression.args.get("kind")).upper() == "STAGE"
+        and isinstance(table := expression.this, exp.Table)
+    ):
+        return expression
+
+    catalog = table.catalog or current_database
+    schema = table.db or current_schema
+    duck_conn.execute(
+        "SELECT url, storage_integration, directory_enabled FROM _fs_global._fs_information_schema._fs_stages "
+        "WHERE database_name = ? AND schema_name = ? AND name = ?",
+        [catalog, schema, table.name],
+    )
+    if not (row := duck_conn.fetchone()):
+        raise not_found_error(f"{catalog}.{schema}.{table.name}")
+    url, storage_integration, directory_enabled = row
+
+    rows = [
+        ("STAGE_FILE_FORMAT", "TYPE", "String", "CSV", "CSV"),
+        ("STAGE_LOCATION", "URL", "String", f'["{url}"]' if url else "", ""),
+        ("STAGE_INTEGRATION", "STORAGE_INTEGRATION", "String", storage_integration or "", ""),
+        ("DIRECTORY", "ENABLE", "Boolean", "true" if directory_enabled == "Y" else "false", "false"),
+    ]
+    values = exp.values(
+        rows,
+        alias="t",
+        columns=["parent_property", "property", "property_type", "property_value", "property_default"],
+    )
+    return exp.select("*").from_(values)
+
+
 def list_stage(
     expression: Expr, current_database: str | None, current_schema: str | None, table_stages: TableStages
 ) -> Expr:
