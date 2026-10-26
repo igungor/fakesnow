@@ -21,6 +21,7 @@ import shutil
 import tempfile
 import uuid
 from email.utils import formatdate
+from urllib.parse import quote
 from xml.etree import ElementTree
 
 from cryptography.hazmat.primitives import padding
@@ -152,10 +153,20 @@ async def bucket(request: Request) -> Response:
         int(params.get("max-keys", "1000")),
         (params.get("continuation-token") or params.get("start-after")) if v2 else params.get("marker"),
         v2,
+        params.get("encoding-type") == "url",
     )
 
 
-def _list_objects(prefix: str, max_keys: int, start_after: str | None, v2: bool) -> Response:
+def _list_objects(prefix: str, max_keys: int, start_after: str | None, v2: bool, url_encoded: bool) -> Response:
+    """List the objects whose key starts with prefix, after start_after, in key order.
+
+    With url_encoded, keys in the response are url-encoded, as clients ask for when keys can have characters
+    XML can't hold. The JDBC driver always does, and decodes them.
+    """
+
+    def encode(key: str) -> str:
+        return quote(key, safe="/") if url_encoded else key
+
     keys = sorted(
         key
         for root, _dirs, files in os.walk(stage.LOCAL_BUCKET_PATH)
@@ -166,19 +177,21 @@ def _list_objects(prefix: str, max_keys: int, start_after: str | None, v2: bool)
 
     root = ElementTree.Element("ListBucketResult", xmlns=S3_NAMESPACE)
     _element(root, "Name", BUCKET)
-    _element(root, "Prefix", prefix)
+    _element(root, "Prefix", encode(prefix))
     _element(root, "MaxKeys", str(max_keys))
+    if url_encoded:
+        _element(root, "EncodingType", "url")
     _element(root, "IsTruncated", "true" if truncated else "false")
     if v2:
         _element(root, "KeyCount", str(len(page)))
         if truncated:
             _element(root, "NextContinuationToken", page[-1])
     elif truncated:
-        _element(root, "NextMarker", page[-1])
+        _element(root, "NextMarker", encode(page[-1]))
     for key in page:
         path = os.path.join(stage.LOCAL_BUCKET_PATH, key)
         contents = _element(root, "Contents")
-        _element(contents, "Key", key)
+        _element(contents, "Key", encode(key))
         _element(contents, "LastModified", _iso(os.path.getmtime(path)))
         _element(contents, "ETag", _etag(path))
         _element(contents, "Size", str(os.path.getsize(path)))

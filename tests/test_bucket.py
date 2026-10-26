@@ -93,6 +93,16 @@ def test_list_objects(s3: S3Client, prefix: str) -> None:
     assert [o["Key"] for o in listed_v2["Contents"]] == [f"{prefix}dir/c"]
 
 
+def test_list_objects_url_encoded(s3: S3Client, prefix: str) -> None:
+    # a table stage's directory starts with %, which the JDBC driver's S3 client asks to be url-encoded
+    key = f"{prefix}%TABLE/a b.gz"
+    s3.put_object(Bucket=BUCKET, Key=key, Body=b"x")
+
+    listed = s3.list_objects(Bucket=BUCKET, Prefix=f"{prefix}%TABLE/", EncodingType="url")
+    assert listed["EncodingType"] == "url"
+    assert [o["Key"] for o in listed["Contents"]] == [key.replace("%", "%25").replace(" ", "%20")]
+
+
 def test_list_objects_pages(s3: S3Client, prefix: str) -> None:
     for name in ["a", "b", "c"]:
         s3.put_object(Bucket=BUCKET, Key=f"{prefix}{name}", Body=b"x")
