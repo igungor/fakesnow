@@ -186,6 +186,12 @@ def copy_into(
         raise snowflake.connector.errors.ProgrammingError(msg=e.args[0], errno=91016, sqlstate="22000") from None
     except duckdb.ConversionException as e:
         raise snowflake.connector.errors.ProgrammingError(msg=e.args[0], errno=100038, sqlstate="22018") from None
+    except duckdb.InvalidInputException as e:
+        if not isinstance(cparams.file_format, ReadJSON):
+            raise
+        raise snowflake.connector.errors.ProgrammingError(
+            msg=f"Error parsing JSON: {e.args[0]}", errno=100069, sqlstate="22P02"
+        ) from None
 
 
 def _result_file_name(url: str) -> str:

@@ -468,6 +468,20 @@ def test_copy_json_single_variant_column(dcur: snowflake.connector.cursor.DictCu
         assert dindent(dcur.fetchall()) == [{"RECORD": '{\n  "a": 1\n}'}, {"RECORD": '{\n  "a": 2\n}'}]
 
 
+def test_copy_json_malformed(dcur: snowflake.connector.cursor.DictCursor) -> None:
+    dcur.execute("CREATE TABLE json_table3 (record VARIANT)")
+    with tempfile.NamedTemporaryFile(mode="w+", suffix=".json") as temp_file:
+        temp_file.write("{not json\n")
+        temp_file.flush()
+
+        dcur.execute("CREATE STAGE json_stage3")
+        dcur.execute(f"PUT 'file://{temp_file.name}' @json_stage3")
+        with pytest.raises(snowflake.connector.errors.ProgrammingError) as excinfo:
+            dcur.execute("COPY INTO json_table3 FROM @json_stage3 FILE_FORMAT = (TYPE = JSON)")
+        assert excinfo.value.errno == 100069
+        assert "Error parsing JSON: " in str(excinfo.value)
+
+
 def test_copy_json_transformation(dcur: snowflake.connector.cursor.DictCursor) -> None:
     dcur.execute("CREATE TABLE json_table2 (meta VARIANT, content VARIANT, id INT)")
     with tempfile.NamedTemporaryFile(mode="w+", suffix=".json") as temp_file:
