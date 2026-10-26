@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import gzip
+import hashlib
 import json
 import logging
 import os
@@ -18,6 +19,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from sqlglot import Expr, exp
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
+from starlette.datastructures import Headers
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
@@ -45,6 +47,10 @@ shared_fs = FakeSnow()
 # clients encrypt files with a key wrapped by the stage master key before uploading them to an internal stage
 STAGE_MASTER_KEY = secrets.token_bytes(16)
 STAGE_MASTER_KEY_ID = 1
+
+# the bucket internal stages are stored in. an underscore isn't valid in a host name, so S3 clients address
+# it path-style, ie: http://host/fs_bucket/key rather than http://fs_bucket.host/key
+BUCKET = "fs_bucket"
 
 
 @dataclass
@@ -187,11 +193,17 @@ async def query_request(request: Request) -> JSONResponse:
                     # rewrite the stage info so the client uploads the file over http to this
                     # server, rather than writing to a local path, which fails when the client
                     # doesn't share the server's filesystem (eg: the server runs in a container).
-                    # GCS is the only location type the connector uploads to via a plain http
+                    # GCS is the only location type the python connector uploads to via a plain http
                     # presigned url, so mimic it. a PUT with a ? placeholder target keeps
                     # LOCAL_FS because the connector re-requests the presigned url by executing
                     # the command without bindings (see SnowflakeGCSRestClient).
-                    put_stage_data["stageInfo"] = gcs_stage_info(request, expr, put_stage_data)
+                    # the JDBC driver can't upload to a GCS presigned url without a session, as
+                    # the Kafka connector does, so it uploads through this server's S3 API.
+                    put_stage_data["stageInfo"] = (
+                        s3_stage_info(request, put_stage_data)
+                        if session.client_app_id == "JDBC"
+                        else gcs_stage_info(request, expr, put_stage_data)
+                    )
                     put_stage_data["encryptionMaterial"] = {
                         "queryStageMasterKey": b64encode(STAGE_MASTER_KEY).decode("utf-8"),
                         "queryId": cur.sfqid,
@@ -291,37 +303,77 @@ def gcs_stage_info(request: Request, expr: Expr, put_stage_data: stage.UploadCom
         "locationType": "GCS",
         "location": f"{expr.args['put_stage_name']}/",
         "creds": {},
-        "presignedUrl": f"{request.url.scheme}://{request.url.netloc}/fs_bucket/{path}",
+        "presignedUrl": f"{request.url.scheme}://{request.url.netloc}/{BUCKET}/{path}",
         # the JDBC driver requires an endPoint of a GCS stage
         "endPoint": None,
     }
 
 
-def _file_key(encryption_data: str) -> tuple[bytes, bytes]:
-    """The key and iv a client encrypted a file with before uploading it, as clients do for snowflake's internal
-    stages.
+def s3_stage_info(request: Request, put_stage_data: stage.UploadCommandDict) -> dict[str, Any]:
+    """Stage info that uploads to this server over http via the S3 API, with credentials it doesn't check."""
+    stage_dir = put_stage_data["stageInfo"]["location"]
+    return {
+        "locationType": "S3",
+        "location": f"{BUCKET}/{os.path.relpath(stage_dir, stage.LOCAL_BUCKET_PATH)}/",
+        "creds": {"AWS_KEY_ID": "fakesnow", "AWS_SECRET_KEY": "fakesnow", "AWS_TOKEN": "fakesnow"},
+        "region": "us-west-2",
+        "endPoint": f"{request.url.scheme}://{request.url.netloc}",
+    }
 
-    The client encrypts the file with a random key, using AES-CBC, and sends that key encrypted with the stage master
-    key, using AES-ECB, in the GCS encryptiondata metadata.
-    """
-    data = json.loads(encryption_data)
-    wrapped_key = base64.b64decode(data["WrappedContentKey"]["EncryptedKey"])
-    iv = base64.b64decode(data["ContentEncryptionIV"])
 
+def _unwrap(wrapped_key: bytes) -> bytes:
     decryptor = Cipher(algorithms.AES(STAGE_MASTER_KEY), modes.ECB()).decryptor()
     unpadder = padding.PKCS7(128).unpadder()
     padded = decryptor.update(wrapped_key) + decryptor.finalize()
-    return unpadder.update(padded) + unpadder.finalize(), iv
+    return unpadder.update(padded) + unpadder.finalize()
 
 
-def _write_bucket_file(path: str, body: bytes, encryption_data: str | None) -> str | None:
+def _file_key(headers: Headers) -> tuple[bytes, bytes] | None:
+    """The key and iv a client encrypted a file with before uploading it, or None if it didn't encrypt it.
+
+    Clients encrypt files for snowflake's internal stages with a random key, using AES-CBC, and send that key
+    encrypted with the stage master key, using AES-ECB, in the object's metadata: GCS's encryptiondata, or S3's
+    x-amz-key and x-amz-iv.
+    """
+    if encryption_data := headers.get("x-goog-meta-encryptiondata"):
+        data = json.loads(encryption_data)
+        wrapped_key = base64.b64decode(data["WrappedContentKey"]["EncryptedKey"])
+        iv = base64.b64decode(data["ContentEncryptionIV"])
+    elif (key := headers.get("x-amz-meta-x-amz-key")) and (iv64 := headers.get("x-amz-meta-x-amz-iv")):
+        wrapped_key = base64.b64decode(key)
+        iv = base64.b64decode(iv64)
+    else:
+        return None
+    return _unwrap(wrapped_key), iv
+
+
+def _decode_aws_chunked(body: bytes) -> bytes:
+    """The payload of an S3 upload sent with aws-chunked content encoding.
+
+    Each chunk is its size in hex, optionally followed by ;chunk-signature=..., then CRLF, the data and CRLF. A
+    zero size chunk ends the payload, followed by any trailing headers, eg: a checksum.
+    See https://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-streaming.html
+    """
+    payload = bytearray()
+    position = 0
+    while True:
+        line_end = body.index(b"\r\n", position)
+        size = int(body[position:line_end].split(b";", 1)[0], 16)
+        if size == 0:
+            return bytes(payload)
+        start = line_end + 2
+        payload += body[start : start + size]
+        position = start + size + 2
+
+
+def _write_bucket_file(path: str, body: bytes, file_key: tuple[bytes, bytes] | None) -> str | None:
     """Write body to path within the local bucket, returning the target path, or None if invalid."""
     target = os.path.normpath(os.path.join(stage.LOCAL_BUCKET_PATH, path))
     if not target.startswith(stage.LOCAL_BUCKET_PATH + os.sep):
         return None
 
-    if encryption_data:
-        stage.write_encrypted_file(target, body, *_file_key(encryption_data))
+    if file_key:
+        stage.write_encrypted_file(target, body, *file_key)
         return target
 
     os.makedirs(os.path.dirname(target), exist_ok=True)
@@ -331,15 +383,19 @@ def _write_bucket_file(path: str, body: bytes, encryption_data: str | None) -> s
 
 
 async def bucket_upload(request: Request) -> Response:
-    """Store an uploaded file in the local bucket, ie: the backing storage for internal stages."""
+    """Store an uploaded file in the local bucket, ie: the backing storage for internal stages.
+
+    Takes a PUT to a GCS presigned url, or an S3 PutObject to the bucket.
+    """
     body = await request.body()
-    target = await run_in_threadpool(
-        _write_bucket_file, request.path_params["path"], body, request.headers.get("x-goog-meta-encryptiondata")
-    )
+    if request.headers.get("x-amz-content-sha256", "").startswith("STREAMING-"):
+        body = _decode_aws_chunked(body)
+    target = await run_in_threadpool(_write_bucket_file, request.path_params["path"], body, _file_key(request.headers))
     if not target:
         return Response(status_code=400)
     logger.info(f"Uploaded {len(body)} bytes to {target}")
-    return Response()
+    # S3 clients check the upload against its md5, which S3 returns as the ETag of an unencrypted object
+    return Response(headers={"ETag": f'"{hashlib.md5(body).hexdigest()}"'})
 
 
 def describe_only_response(
@@ -500,7 +556,7 @@ routes = [
         methods=["POST"],
     ),
     Route("/queries/v1/abort-request", lambda _: JSONResponse({"success": True}), methods=["POST"]),
-    Route("/fs_bucket/{path:path}", bucket_upload, methods=["PUT"]),
+    Route(f"/{BUCKET}/{{path:path}}", bucket_upload, methods=["PUT"]),
     Route("/monitoring/queries/{sfqid}", monitoring_query, methods=["GET"]),
     Route("/v1/data/pipes/{pipe}/insertFiles", insert_files, methods=["POST"]),
     Route("/v1/data/pipes/{pipe}/insertReport", insert_report, methods=["GET"]),

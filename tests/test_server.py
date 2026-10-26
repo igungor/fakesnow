@@ -2,6 +2,7 @@
 
 import base64
 import datetime
+import hashlib
 import os
 import tempfile
 import uuid
@@ -9,6 +10,7 @@ from decimal import Decimal
 from typing import Any
 from unittest.mock import patch
 
+import boto3
 import numpy as np
 import pandas as pd
 import pytest
@@ -636,6 +638,87 @@ def test_server_put_presigned_stage_info(sconn: snowflake.connector.SnowflakeCon
         material = result["data"]["encryptionMaterial"]
         assert len(base64.b64decode(material["queryStageMasterKey"])) == 16
         assert material["queryId"] and material["smkId"]
+
+
+def _encrypt(content: bytes, material: dict) -> tuple[bytes, dict[str, str]]:
+    """Encrypt a file for an internal stage as snowflake's clients do, returning it and its S3 metadata."""
+    from cryptography.hazmat.primitives import padding
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+    def pad(data: bytes) -> bytes:
+        padder = padding.PKCS7(128).padder()
+        return padder.update(data) + padder.finalize()
+
+    file_key, iv = os.urandom(16), os.urandom(16)
+    encryptor = Cipher(algorithms.AES(file_key), modes.CBC(iv)).encryptor()
+    body = encryptor.update(pad(content)) + encryptor.finalize()
+    master_key = base64.b64decode(material["queryStageMasterKey"])
+    key_encryptor = Cipher(algorithms.AES(master_key), modes.ECB()).encryptor()
+    wrapped = key_encryptor.update(pad(file_key)) + key_encryptor.finalize()
+    return body, {"x-amz-key": base64.b64encode(wrapped).decode(), "x-amz-iv": base64.b64encode(iv).decode()}
+
+
+def test_server_put_jdbc_uploads_through_s3(server: dict) -> None:
+    # the JDBC driver can't upload to a GCS presigned url without a session, so it gets an S3 stage
+    with (
+        snowflake.connector.connect(
+            **server, database="db1", schema="schema1", internal_application_name="JDBC"
+        ) as conn,
+        conn.cursor() as cur,
+    ):
+        cur.execute("CREATE STAGE s3_stage")
+        cur.execute("CREATE TABLE s3_table (a INT, b INT)")
+
+        result = conn.cmd_query(
+            "PUT file:///tmp/ @s3_stage/dir",
+            conn._next_sequence_counter(),  # noqa: SLF001
+            uuid.uuid4(),
+            is_file_transfer=True,
+        )
+        stage_info = result["data"]["stageInfo"]
+        assert stage_info["locationType"] == "S3"
+        assert stage_info["endPoint"] == f"http://{server['host']}:{server['port']}"
+        bucket, _, prefix = stage_info["location"].partition("/")
+        assert bucket == "fs_bucket"
+        assert prefix.endswith("/S3_STAGE/dir/")
+
+        s3 = boto3.client(
+            "s3",
+            endpoint_url=stage_info["endPoint"],
+            region_name=stage_info["region"],
+            aws_access_key_id=stage_info["creds"]["AWS_KEY_ID"],
+            aws_secret_access_key=stage_info["creds"]["AWS_SECRET_KEY"],
+            aws_session_token=stage_info["creds"]["AWS_TOKEN"],
+        )
+        body, metadata = _encrypt(b"1,2\n3,4\n", result["data"]["encryptionMaterial"])
+        response = s3.put_object(Bucket=bucket, Key=f"{prefix}data.csv", Body=body, Metadata=metadata)
+        assert response["ETag"] == f'"{hashlib.md5(body).hexdigest()}"'
+
+        cur.execute("LIST @s3_stage")
+        assert [r[0] for r in cur.fetchall()] == ["s3_stage/dir/data.csv"]
+        cur.execute("COPY INTO s3_table FROM @s3_stage")
+        cur.execute("SELECT * FROM s3_table ORDER BY a")
+        assert cur.fetchall() == [(1, 2), (3, 4)]
+
+
+def test_server_bucket_upload_aws_chunked(server: dict) -> None:
+    # S3 clients sign each chunk of the payload when they upload over http
+    chunks = [b"1,2\n", b"3,4\n"]
+    body = b"".join(f"{len(c):x};chunk-signature={'0' * 64}\r\n".encode() + c + b"\r\n" for c in chunks)
+    body += f"0;chunk-signature={'0' * 64}\r\n\r\n".encode()
+
+    response = requests.put(
+        f"http://{server['host']}:{server['port']}/fs_bucket/DB1/SCHEMA1/CHUNKED_STAGE/data.csv",
+        data=body,
+        headers={
+            "x-amz-content-sha256": "STREAMING-AWS4-HMAC-SHA256-PAYLOAD",
+            "Content-Encoding": "aws-chunked",
+            "x-amz-decoded-content-length": "8",
+        },
+        timeout=5,
+    )
+    assert response.status_code == 200
+    assert response.headers["ETag"] == f'"{hashlib.md5(b"".join(chunks)).hexdigest()}"'
 
 
 def test_server_bucket_upload_rejects_path_outside_bucket(server: dict) -> None:
