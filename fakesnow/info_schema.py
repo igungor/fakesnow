@@ -307,6 +307,31 @@ CREATE TABLE IF NOT EXISTS _fs_global._fs_information_schema._fs_pipes (
 );
 """
 
+# the files each pipe loaded, as snowpipe's insertReport and loadHistoryScan report them
+SQL_CREATE_GLOBAL_INFORMATION_SCHEMA_PIPE_LOAD_HISTORY_TABLE = """
+CREATE SEQUENCE IF NOT EXISTS _fs_global._fs_information_schema._fs_pipe_load_history_seq;
+CREATE TABLE IF NOT EXISTS _fs_global._fs_information_schema._fs_pipe_load_history (
+    seq BIGINT DEFAULT nextval('_fs_global._fs_information_schema._fs_pipe_load_history_seq'),
+    pipe_catalog TEXT,
+    pipe_schema TEXT,
+    pipe_name TEXT,
+    path TEXT,
+    stage_location TEXT,
+    file_size BIGINT,
+    time_received TIMESTAMPTZ,
+    last_insert_time TIMESTAMPTZ,
+    rows_inserted BIGINT,
+    rows_parsed BIGINT,
+    errors_seen BIGINT,
+    error_limit BIGINT,
+    first_error TEXT,
+    first_error_line_num BIGINT,
+    first_error_character_pos BIGINT,
+    first_error_column_name TEXT,
+    status TEXT
+);
+"""
+
 SQL_CREATE_GLOBAL_INFORMATION_SCHEMA_FILE_FORMATS_TABLE = """
 CREATE TABLE IF NOT EXISTS _fs_global._fs_information_schema._fs_file_formats (
     created_on TIMESTAMPTZ,
@@ -342,6 +367,7 @@ def fs_global_creation_sql() -> str:
         {SQL_CREATE_GLOBAL_INFORMATION_SCHEMA_USERS_TABLE};
         {SQL_CREATE_GLOBAL_INFORMATION_SCHEMA_STAGES_TABLE};
         {SQL_CREATE_GLOBAL_INFORMATION_SCHEMA_PIPES_TABLE};
+        {SQL_CREATE_GLOBAL_INFORMATION_SCHEMA_PIPE_LOAD_HISTORY_TABLE};
         {SQL_CREATE_GLOBAL_INFORMATION_SCHEMA_FILE_FORMATS_TABLE}
     """
 

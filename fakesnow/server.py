@@ -6,6 +6,7 @@ import logging
 import os
 import secrets
 from base64 import b64encode
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote
@@ -18,7 +19,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from fakesnow import statement_type
+from fakesnow import snowpipe, statement_type
 from fakesnow.arrow import to_ipc, to_sf
 from fakesnow.converter import from_binding
 from fakesnow.cursor import FakeSnowflakeCursor
@@ -384,6 +385,59 @@ async def session(request: Request) -> JSONResponse:
         )
 
 
+def _snowpipe_error(status_code: int, code: str, message: str) -> JSONResponse:
+    return JSONResponse(
+        {"data": None, "code": code, "message": message, "success": False, "headers": None}, status_code=status_code
+    )
+
+
+async def _snowpipe(request: Request, handle: Callable[[str], dict[str, Any]]) -> JSONResponse:
+    """Run a snowpipe REST API request, which authenticates with a key pair JWT rather than a session."""
+    if not request.headers.get("Authorization"):
+        return _snowpipe_error(401, "390101", "Authorization failed")
+    try:
+        return JSONResponse(await run_in_threadpool(handle, request.path_params["pipe"]))
+    except snowflake.connector.errors.ProgrammingError as e:
+        return _snowpipe_error(404, f"{e.errno:06d}", e.msg or "")
+
+
+async def insert_files(request: Request) -> JSONResponse:
+    body = await request.body()
+    if request.headers.get("Content-Encoding") == "gzip":
+        body = gzip.decompress(body)
+    files = json.loads(body).get("files") or []
+
+    def handle(pipe: str) -> dict[str, Any]:
+        snowpipe.insert_files(shared_fs, pipe, files)
+        response: dict[str, Any] = {
+            "requestId": request.query_params.get("requestId") or snowpipe.request_id(),
+            "responseCode": "SUCCESS",
+        }
+        if request.query_params.get("showSkippedFiles") == "true":
+            response["skippedFiles"] = []
+        return response
+
+    return await _snowpipe(request, handle)
+
+
+async def insert_report(request: Request) -> JSONResponse:
+    return await _snowpipe(
+        request, lambda pipe: snowpipe.insert_report(shared_fs, pipe, request.query_params.get("beginMark"))
+    )
+
+
+async def load_history_scan(request: Request) -> JSONResponse:
+    return await _snowpipe(
+        request,
+        lambda pipe: snowpipe.load_history_scan(
+            shared_fs,
+            pipe,
+            request.query_params.get("startTimeInclusive"),
+            request.query_params.get("endTimeExclusive"),
+        ),
+    )
+
+
 def monitoring_query(request: Request) -> JSONResponse:
     token = to_token(request)
     conn = to_conn(token)
@@ -411,6 +465,9 @@ routes = [
     Route("/queries/v1/abort-request", lambda _: JSONResponse({"success": True}), methods=["POST"]),
     Route("/fs_bucket/{path:path}", bucket_upload, methods=["PUT"]),
     Route("/monitoring/queries/{sfqid}", monitoring_query, methods=["GET"]),
+    Route("/v1/data/pipes/{pipe}/insertFiles", insert_files, methods=["POST"]),
+    Route("/v1/data/pipes/{pipe}/insertReport", insert_report, methods=["GET"]),
+    Route("/v1/data/pipes/{pipe}/loadHistoryScan", load_history_scan, methods=["GET"]),
 ]
 
 app = Starlette(debug=True, routes=routes)

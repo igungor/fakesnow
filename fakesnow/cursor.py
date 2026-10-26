@@ -636,6 +636,7 @@ class FakeSnowflakeCursor:
         elif pipe_name := transformed.args.get("create_pipe_name"):
             (affected_count,) = self._duck_conn.fetchall()[0]
             if affected_count > 0:
+                self._forget_pipe_load_history(transformed)
                 result_sql = SQL_CREATED_PIPE.substitute(name=pipe_name)
             elif transformed.args.get("create_pipe_if_not_exists"):
                 result_sql = SQL_OBJECT_EXISTS.substitute(name=pipe_name)
@@ -647,6 +648,7 @@ class FakeSnowflakeCursor:
                 )
 
         elif pipe_name := transformed.args.get("drop_pipe_name"):
+            self._forget_pipe_load_history(transformed)
             result_sql = SQL_DROPPED.substitute(name=pipe_name)
 
         elif format_name := transformed.args.get("create_file_format_name"):
@@ -794,6 +796,15 @@ class FakeSnowflakeCursor:
             self._last_params,
             self._last_transformed,
         )
+
+    def _forget_pipe_load_history(self, transformed: Expr) -> None:
+        """A dropped or replaced pipe loses the history of the files it loaded."""
+        if pipe := transformed.args.get("forget_pipe_load_history"):
+            self._duck_conn.execute(
+                "DELETE FROM _fs_global._fs_information_schema._fs_pipe_load_history "
+                "WHERE pipe_catalog = ? AND pipe_schema = ? AND pipe_name = ?",
+                list(pipe),
+            )
 
     def executemany(
         self,

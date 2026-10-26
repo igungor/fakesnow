@@ -119,6 +119,8 @@ def create_pipe(
     transformed = sqlglot.parse_one(insert_sql, read="duckdb")
     transformed.args["create_pipe_name"] = name
     transformed.args["create_pipe_if_not_exists"] = expression.args.get("exists")
+    if replace:
+        transformed.args["forget_pipe_load_history"] = (catalog, schema, name)
     return transformed
 
 
@@ -231,4 +233,5 @@ def drop_pipe(
         read="duckdb",
     )
     transformed.args["drop_pipe_name"] = name
+    transformed.args["forget_pipe_load_history"] = (catalog, schema, name)
     return transformed
