@@ -16,7 +16,9 @@ from __future__ import annotations
 import secrets
 from decimal import Decimal
 
+import snowflake.connector.errors
 import sqlglot
+from duckdb import DuckDBPyConnection
 from sqlglot import Expr, exp
 
 from fakesnow.transforms.transforms import SUCCESS_NOP
@@ -227,3 +229,88 @@ def default_decimal_literal(expression: Expr) -> Expr:
     ):
         literal.set("this", format(Decimal(literal.this).normalize(), "f"))
     return expression
+
+
+_T = exp.DataType.Type
+
+# snowflake's data type, as it names it, for each of sqlglot's types
+_SF_TYPES = {
+    **dict.fromkeys([_T.DECIMAL, _T.INT, _T.BIGINT, _T.SMALLINT, _T.TINYINT], "NUMBER"),
+    **dict.fromkeys([_T.DOUBLE, _T.FLOAT], "FLOAT"),
+    **dict.fromkeys([_T.VARCHAR, _T.TEXT, _T.CHAR, _T.NCHAR, _T.NVARCHAR], "TEXT"),
+    **dict.fromkeys([_T.BINARY, _T.VARBINARY], "BINARY"),
+    **dict.fromkeys([_T.TIMESTAMP, _T.TIMESTAMPNTZ, _T.DATETIME], "TIMESTAMP_NTZ"),
+    _T.TIMESTAMPLTZ: "TIMESTAMP_LTZ",
+    _T.TIMESTAMPTZ: "TIMESTAMP_TZ",
+    _T.BOOLEAN: "BOOLEAN",
+    _T.DATE: "DATE",
+    _T.TIME: "TIME",
+    _T.VARIANT: "VARIANT",
+    _T.OBJECT: "OBJECT",
+    _T.ARRAY: "ARRAY",
+}
+
+
+def alter_column_type(
+    expression: Expr, duck_conn: DuckDBPyConnection, current_database: str | None, current_schema: str | None
+) -> Expr:
+    """Reject the column type changes snowflake doesn't support: to another data type, or to another number scale.
+
+    See https://docs.snowflake.com/en/sql-reference/sql/alter-table-column
+    """
+    if not (
+        isinstance(expression, exp.Alter)
+        and expression.kind == "TABLE"
+        and isinstance(table := expression.this, exp.Table)
+        and (catalog := table.catalog or current_database)
+        and (schema := table.db or current_schema)
+    ):
+        return expression
+
+    for action in expression.args.get("actions") or []:
+        if not (isinstance(action, exp.AlterColumn) and isinstance(dtype := action.args.get("dtype"), exp.DataType)):
+            continue
+        if not (new_type := _SF_TYPES.get(dtype.this)):
+            continue
+
+        duck_conn.execute(
+            "select column_name, data_type, character_maximum_length, numeric_precision, numeric_scale "
+            "from _fs_global._fs_information_schema._fs_columns "
+            "where table_catalog = ? and table_schema = ? and table_name = ? and column_name = ?",
+            [catalog, schema, table.name, action.this.name],
+        )
+        if not (row := duck_conn.fetchone()):
+            continue
+        column, old_type, old_length, old_precision, old_scale = row
+
+        params = [int(p.this.this) for p in dtype.expressions if isinstance(p.this, exp.Literal)]
+        new_precision, new_scale = (params + [38, 0][len(params) :])[:2] if new_type == "NUMBER" else (None, None)
+        new_length = (params or [None])[0] if new_type == "TEXT" else None
+
+        old = _render(old_type, old_length, old_precision, old_scale)
+        new = _render(new_type, new_length, new_precision, new_scale)
+        if old_type != new_type:
+            raise snowflake.connector.errors.ProgrammingError(
+                msg=f"SQL compilation error: cannot change column {column} from type {old} to {new}", errno=2108
+            )
+        if new_type == "NUMBER" and new_scale != old_scale:
+            raise snowflake.connector.errors.ProgrammingError(
+                msg=f"SQL compilation error: cannot change column {column} from type {old} to {new} "
+                "because changing the scale of a number is not supported.",
+                errno=40052,
+            )
+
+    return expression
+
+
+def _render(sf_type: str, length: int | None, precision: int | None, scale: int | None) -> str:
+    """The type as snowflake writes it in error messages, eg: VARCHAR(16777216)."""
+    if sf_type == "NUMBER":
+        return f"NUMBER({precision if precision is not None else 38},{scale or 0})"
+    elif sf_type == "TEXT":
+        return f"VARCHAR({length or 16777216})"
+    elif sf_type == "BINARY":
+        return "BINARY(8388608)"
+    elif sf_type.startswith("TIMESTAMP") or sf_type == "TIME":
+        return f"{sf_type}(9)"
+    return sf_type

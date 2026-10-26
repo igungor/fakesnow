@@ -37,6 +37,41 @@ def test_alias_on_join(conn: snowflake.connector.SnowflakeConnection):
     assert cur.fetchall() == [("VARCHAR1", "CHAR1", "JOIN"), ("VARCHAR2", "CHAR2", None)]
 
 
+def test_alter_column_type_to_another_type(cur: snowflake.connector.cursor.SnowflakeCursor):
+    cur.execute("create table example (v varchar, n number(13,0))")
+
+    with pytest.raises(ProgrammingError) as excinfo:
+        cur.execute("alter table example alter v type number")
+    assert str(excinfo.value) == (
+        "002108: SQL compilation error: cannot change column V from type VARCHAR(16777216) to NUMBER(38,0)"
+    )
+
+    with pytest.raises(ProgrammingError) as excinfo:
+        cur.execute("alter table example alter column n set data type varchar")
+    assert str(excinfo.value) == (
+        "002108: SQL compilation error: cannot change column N from type NUMBER(13,0) to VARCHAR(16777216)"
+    )
+
+
+def test_alter_column_type_number_scale(cur: snowflake.connector.cursor.SnowflakeCursor):
+    cur.execute("create table example (cost number)")
+
+    with pytest.raises(ProgrammingError) as excinfo:
+        cur.execute("alter table example alter column cost set data type number(38,6)")
+    assert str(excinfo.value) == (
+        "040052: SQL compilation error: cannot change column COST from type NUMBER(38,0) to NUMBER(38,6) "
+        "because changing the scale of a number is not supported."
+    )
+
+
+def test_alter_column_type_number_precision(cur: snowflake.connector.cursor.SnowflakeCursor):
+    cur.execute("create table example (n number(10,2))")
+    cur.execute("insert into example values (1.5)")
+    cur.execute("alter table example alter n type number(12,2)")
+    cur.execute("select n from example")
+    assert cur.fetchall() == [(Decimal("1.50"),)]
+
+
 def test_alter_table(dcur: snowflake.connector.cursor.SnowflakeCursor):
     dcur.execute("create table table1 (id int)")
     dcur.execute("alter table table1 add column name varchar(20)")

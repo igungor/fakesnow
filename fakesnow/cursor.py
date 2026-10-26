@@ -317,6 +317,10 @@ class FakeSnowflakeCursor:
             expression.transform(lambda e: transforms.identifier(e, params), copy=False)
             .transform(transforms.upper_case_unquoted_identifiers, copy=False)
             .transform(transforms.alter_session, copy=False)
+            .transform(
+                lambda e: transforms.alter_column_type(e, self._duck_conn, self._conn.database, self._conn.schema),
+                copy=False,
+            )
             .transform(transforms.update_variables, variables=self._conn.variables, copy=False)
             .transform(transforms.current_version, copy=False)
             .transform(transforms.set_schema, current_database=self._conn.database, copy=False)
