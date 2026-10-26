@@ -617,6 +617,24 @@ def test_server_put_qmark_target_stays_local(sconn: snowflake.connector.Snowflak
         assert result["data"]["stageInfo"]["locationType"] == "LOCAL_FS"
 
 
+def test_server_put_presigned_stage_info(sconn: snowflake.connector.SnowflakeConnection) -> None:
+    with sconn.cursor() as cur, tempfile.NamedTemporaryFile(suffix=".csv") as temp_file:
+        cur.execute("CREATE STAGE presigned_stage")
+
+        result = sconn.cmd_query(
+            f"PUT 'file://{temp_file.name}' @presigned_stage",
+            sconn._next_sequence_counter(),  # noqa: SLF001
+            uuid.uuid4(),
+            is_file_transfer=True,
+        )
+
+        stage_info = result["data"]["stageInfo"]
+        assert stage_info["locationType"] == "GCS"
+        # the JDBC driver fails on a GCS stage without an endPoint, and encrypts without isClientSideEncrypted false
+        assert stage_info["endPoint"] is None
+        assert stage_info["isClientSideEncrypted"] is False
+
+
 def test_server_bucket_upload_rejects_path_outside_bucket(server: dict) -> None:
     response = requests.put(f"http://{server['host']}:{server['port']}/fs_bucket//etc/passwd", data=b"x", timeout=5)
 

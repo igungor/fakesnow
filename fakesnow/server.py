@@ -280,6 +280,9 @@ def gcs_stage_info(request: Request, expr: Expr, put_stage_data: stage.UploadCom
         "location": f"{expr.args['put_stage_name']}/",
         "creds": {},
         "presignedUrl": f"{request.url.scheme}://{request.url.netloc}/fs_bucket/{path}",
+        # the JDBC driver requires an endPoint of a GCS stage, and encrypts files before uploading unless told not to
+        "endPoint": None,
+        "isClientSideEncrypted": False,
     }
 
 
