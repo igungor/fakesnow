@@ -14,6 +14,7 @@ Future DDL transforms can be added here:
 from __future__ import annotations
 
 import secrets
+from decimal import Decimal
 
 import sqlglot
 from sqlglot import Expr, exp
@@ -208,3 +209,21 @@ def create_table_autoincrement(
     target_col.set("constraints", existing_constraints)
 
     return [seq_stmt, new_create]
+
+
+def default_decimal_literal(expression: Expr) -> Expr:
+    """Write a decimal literal column default in its shortest form, as snowflake shows it, eg: 12.34000000 as 12.34.
+
+    The value is the same, only how SHOW COLUMNS and information_schema show it changes.
+    """
+    if (
+        isinstance(expression, exp.DefaultColumnConstraint)
+        and isinstance(
+            literal := expression.this.this if isinstance(expression.this, exp.Neg) else expression.this, exp.Literal
+        )
+        and not literal.is_string
+        and "." in literal.this
+        and "e" not in literal.this.lower()
+    ):
+        literal.set("this", format(Decimal(literal.this).normalize(), "f"))
+    return expression

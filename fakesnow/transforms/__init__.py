@@ -4,6 +4,7 @@ from fakesnow.transforms.ddl import (
     alter_table_add_multiple_columns as alter_table_add_multiple_columns,
     alter_table_strip_cluster_by as alter_table_strip_cluster_by,
     create_table_autoincrement as create_table_autoincrement,
+    default_decimal_literal as default_decimal_literal,
 )
 from fakesnow.transforms.file_format import (
     create_file_format as create_file_format,

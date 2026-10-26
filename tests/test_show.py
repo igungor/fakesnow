@@ -106,6 +106,14 @@ def test_show_columns(dcur: snowflake.connector.cursor.SnowflakeCursor):
     ]
 
 
+def test_show_columns_decimal_default(dcur: snowflake.connector.cursor.SnowflakeCursor):
+    dcur.execute("create or replace table example (a number(10,8) default 12.34000000, b number(10,2) default -1.50)")
+    dcur.execute("alter table example add column c number(10,2) default 10.0")
+    dcur.execute("show columns in example")
+    rows = cast(list[dict], dcur.fetchall())
+    assert [(r["column_name"], r["default"]) for r in rows] == [("A", "12.34"), ("B", "-1.5"), ("C", "10")]
+
+
 def test_show_databases(dcur: snowflake.connector.cursor.SnowflakeCursor):
     dcur.execute("show databases")
     assert dcur.fetchall() == [

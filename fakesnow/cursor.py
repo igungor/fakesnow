@@ -356,6 +356,7 @@ class FakeSnowflakeCursor:
             .transform(transforms.float_to_double, copy=False)
             .transform(transforms.integer_precision, copy=False)
             .transform(transforms.extract_text_length, copy=False)
+            .transform(transforms.default_decimal_literal, copy=False)
             .transform(transforms.sample, copy=False)
             .transform(transforms.array_size, copy=False)
             .transform(transforms.random, copy=False)
